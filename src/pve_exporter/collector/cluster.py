@@ -244,12 +244,13 @@ class HighAvailabilityStateMetric(GaugeMetricFamily):
         'node': NODE_STATES,
     }
 
-    def __init__(self):
+    def __init__(self, sparse: bool = False):
         super().__init__(
             'pve_ha_state',
             'HA service status (for HA managed VMs).',
             labels=['id', 'state']
         )
+        self._sparse = sparse
 
     def add_metric_from_resource(self, resource: dict):
         """Inspect resource and add suitable metric- to the metric family.
@@ -259,6 +260,10 @@ class HighAvailabilityStateMetric(GaugeMetricFamily):
         """
         restype = resource['type']
         if restype in self.STATES:
+            # In sparse mode, skip guests which are not managed by HA.
+            if self._sparse and restype != 'node' and not resource.get('hastate'):
+                return
+
             for state in self.STATES[restype]:
                 value = resource.get('hastate', None) == state
                 self.add_metric([resource['id'], state], value)
@@ -286,12 +291,13 @@ class LockStateMetric(GaugeMetricFamily):
         'lxc': GUEST_STATES,
     }
 
-    def __init__(self):
+    def __init__(self, sparse: bool = False):
         super().__init__(
             'pve_lock_state',
             "The guest's current config lock (for types 'qemu' and 'lxc')",
             labels=['id', 'state']
         )
+        self._sparse = sparse
 
     def add_metric_from_resource(self, resource: dict):
         """Inspect resource and add suitable metric- to the metric family.
@@ -301,6 +307,13 @@ class LockStateMetric(GaugeMetricFamily):
         """
         restype = resource['type']
         if restype in self.STATES:
+            # In sparse mode, only expose the lock the guest currently holds.
+            if self._sparse:
+                lock = resource.get('lock', None)
+                if lock in self.STATES[restype]:
+                    self.add_metric([resource['id'], lock], 1)
+                return
+
             for state in self.STATES[restype]:
                 value = resource.get('lock', None) == state
                 self.add_metric([resource['id'], state], value)
@@ -310,10 +323,14 @@ class ClusterResourcesCollector:
     """
     Collects Proxmox VE cluster resources information, i.e. memory, storage, cpu
     usage for cluster nodes and guests.
+
+    If sparse_states is set, pve_ha_state is only exposed for HA managed guests
+    and pve_lock_state only for the lock a guest currently holds.
     """
 
-    def __init__(self, pve):
+    def __init__(self, pve, sparse_states: bool = False):
         self._pve = pve
+        self._sparse_states = sparse_states
 
     def collect(self):  # pylint: disable=missing-docstring
         metrics = {
@@ -327,8 +344,9 @@ class ClusterResourcesCollector:
             'disk': GaugeMetricFamily(
                 'pve_disk_usage_bytes',
                 (
-                    "Used disk space in bytes (for type 'storage'), used root image space for VMs "
-                    "(for types 'qemu' and 'lxc')."
+                    "Used disk space in bytes (for type 'storage'), used root filesystem space "
+                    "(for types 'node' and 'lxc'). Not exposed for type 'qemu' while PVE "
+                    "reports 0."
                 ),
                 labels=['id']),
             'maxmem': GaugeMetricFamily(
@@ -424,8 +442,8 @@ class ClusterResourcesCollector:
                 labels=['id']),
         }
 
-        ha_metric = HighAvailabilityStateMetric()
-        lock_metric = LockStateMetric()
+        ha_metric = HighAvailabilityStateMetric(sparse=self._sparse_states)
+        lock_metric = LockStateMetric(sparse=self._sparse_states)
 
         info_metrics = {
             'guest': GaugeMetricFamily(
@@ -457,6 +475,11 @@ class ClusterResourcesCollector:
         for resource in self._pve.cluster.resources.get():
             restype = resource['type']
 
+            # Pools (PVE 9+) report the sum of their members. Exposing them
+            # would double count guests in every aggregation over these metrics.
+            if restype == 'pool':
+                continue
+
             if restype in info_lookup:
                 all_labels = self._extract_resource_labels(info_lookup[restype], resource)
                 info_lookup[restype]['gauge'].add_metric(all_labels, 1)
@@ -466,6 +489,9 @@ class ClusterResourcesCollector:
 
             label_values = [resource['id']]
             for key, metric_value in resource.items():
+                # PVE cannot see inside qemu guests and reports a disk usage of 0.
+                if restype == 'qemu' and key == 'disk' and not metric_value:
+                    continue
                 if key in metrics:
                     metrics[key].add_metric(label_values, metric_value)
                 if key in counter_metrics:
@@ -531,16 +557,19 @@ class BackupInfoCollector:
         )
 
         not_enabled_data = self._pve.cluster("backup-info/not-backed-up").get()
-        cluster_name = self._pve.cluster.status.get()[0]['name']
+        cluster_name = next((entry['name'] for entry in self._pve.cluster.status.get()
+                             if entry['type'] == 'cluster'), None)
 
         for entry in not_enabled_data:
             label_values = [f"{entry['type']}/{entry['vmid']}"]
             not_enabled_info.add_metric(label_values, 1)
 
-        not_enabled_total.add_metric(
-            [f"cluster/{cluster_name}"],
-            len(not_enabled_data)
-        )
+        # Standalone nodes have no cluster entry to attach the total to.
+        if cluster_name is not None:
+            not_enabled_total.add_metric(
+                [f"cluster/{cluster_name}"],
+                len(not_enabled_data)
+            )
 
         yield not_enabled_total
         yield not_enabled_info

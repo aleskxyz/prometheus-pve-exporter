@@ -64,6 +64,7 @@ Usage
                         [--collector.node | --no-collector.node]
                         [--collector.cluster | --no-collector.cluster]
                         [--collector.resources | --no-collector.resources]
+                        [--collector.resources.sparse-states | --no-collector.resources.sparse-states]
                         [--collector.backup-info | --no-collector.backup-info]
                         [--collector.qdevice | --no-collector.qdevice]
                         [--collector.config | --no-collector.config]
@@ -102,6 +103,9 @@ Usage
                             Exposes PVE cluster info
       --collector.resources, --no-collector.resources
                             Exposes PVE resources info
+      --collector.resources.sparse-states, --no-collector.resources.sparse-states
+                            Only exposes pve_ha_state for HA managed guests and
+                            pve_lock_state for the lock a guest currently holds
       --collector.backup-info, --no-collector.backup-info
                             Exposes information about guests which are not covered
                             by any backup job

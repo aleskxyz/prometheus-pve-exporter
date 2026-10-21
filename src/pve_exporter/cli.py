@@ -38,6 +38,11 @@ def main():
     clusterflags.add_argument('--collector.resources', dest='collector_resources',
                               action=BooleanOptionalAction, default=True,
                               help='Exposes PVE resources info')
+    clusterflags.add_argument('--collector.resources.sparse-states',
+                              dest='collector_resources_sparse_states',
+                              action=BooleanOptionalAction, default=False,
+                              help=('Only exposes pve_ha_state for HA managed guests and '
+                                    'pve_lock_state for the lock a guest currently holds'))
     clusterflags.add_argument('--collector.backup-info', dest='collector_backup_info',
                               action=BooleanOptionalAction, default=True,
                               help=('Exposes information about guests which are not '
@@ -98,7 +103,8 @@ def main():
         backup_info=params.collector_backup_info,
         config=params.collector_config,
         replication=params.collector_replication,
-        qdevice=params.collector_qdevice
+        qdevice=params.collector_qdevice,
+        sparse_states=params.collector_resources_sparse_states
     )
     scrape_metrics.API_METRICS_ENABLED = params.api_metrics_enabled
     scrape_metrics.TARGET_METRICS_ENABLED = params.target_metrics_enabled
