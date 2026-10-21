@@ -32,8 +32,9 @@ CollectorsOptions = collections.namedtuple('CollectorsOptions', [
     'backup_info',
     'config',
     'replication',
-    'qdevice'
-])
+    'qdevice',
+    'sparse_states'
+], defaults=[False])
 
 
 def collect_pve(config, host, cluster, node, options: CollectorsOptions):
@@ -45,7 +46,7 @@ def collect_pve(config, host, cluster, node, options: CollectorsOptions):
     if cluster and options.status:
         registry.register(StatusCollector(pve))
     if cluster and options.resources:
-        registry.register(ClusterResourcesCollector(pve))
+        registry.register(ClusterResourcesCollector(pve, options.sparse_states))
     if cluster and options.node:
         registry.register(ClusterNodeCollector(pve))
     if cluster and options.cluster:

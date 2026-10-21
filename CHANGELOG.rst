@@ -15,6 +15,21 @@ Added
 - Optional per-module ``allow_list`` (``PVE_ALLOW_LIST`` environment variable)
   restricting which PVE hosts a module's credentials may be sent to. Scrapes
   of other targets are rejected with HTTP 403.
+- ``--collector.resources.sparse-states`` flag (off by default). When set,
+  ``pve_ha_state`` is only exposed for HA managed guests and ``pve_lock_state``
+  only for the lock a guest currently holds, instead of one zero-valued series
+  per possible state and guest.
+
+Fixed
+~~~~~
+
+- Skip ``pool`` entries of ``/cluster/resources`` (PVE 9+). Their aggregated
+  CPU, memory and uptime values were exposed with ``id="/pool/<name>"`` and
+  double counted guests in sums.
+- Do not expose ``pve_disk_usage_bytes`` for qemu guests while PVE reports 0.
+- ``pve_not_backed_up_total`` now looks up the cluster entry by type instead
+  of taking the first ``/cluster/status`` entry, and is omitted on standalone
+  nodes.
 
 
 `3.10.1`_ - 2026-10-03
