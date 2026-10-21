@@ -9,12 +9,13 @@ The format is based on `Keep a Changelog`_ and this project adheres to
 `Unreleased`_
 -------------
 
+
+`3.12.0`_ - 2026-10-21
+----------------------
+
 Added
 ~~~~~
 
-- Optional per-module ``allow_list`` (``PVE_ALLOW_LIST`` environment variable)
-  restricting which PVE hosts a module's credentials may be sent to. Scrapes
-  of other targets are rejected with HTTP 403.
 - ``--collector.resources.sparse-states`` flag (off by default). When set,
   ``pve_ha_state`` is only exposed for HA managed guests and ``pve_lock_state``
   only for the lock a guest currently holds, instead of one zero-valued series
@@ -30,6 +31,22 @@ Fixed
 - ``pve_not_backed_up_total`` now looks up the cluster entry by type instead
   of taking the first ``/cluster/status`` entry, and is omitted on standalone
   nodes.
+
+
+`3.11.0`_ - 2026-10-15
+----------------------
+
+Added
+~~~~~
+
+- Optional per-module ``allow_list`` (``PVE_ALLOW_LIST`` environment variable)
+  restricting which PVE hosts a module's credentials may be sent to. Scrapes
+  of other targets are rejected with HTTP 403.
+
+Changed
+~~~~~~~
+
+- Publish the container image to GHCR only, no longer to PyPI.
 
 
 `3.10.1`_ - 2026-10-03
@@ -772,7 +789,9 @@ Added
 
 .. _Keep a Changelog: http://keepachangelog.com/en/1.0.0/
 .. _Semantic Versioning: http://semver.org/spec/v2.0.0.html
-.. _Unreleased: https://github.com/prometheus-pve/prometheus-pve-exporter/compare/v3.10.1...HEAD
+.. _Unreleased: https://github.com/aleskxyz/prometheus-pve-exporter/compare/v3.12.0...HEAD
+.. _3.12.0: https://github.com/aleskxyz/prometheus-pve-exporter/compare/v3.11.0...v3.12.0
+.. _3.11.0: https://github.com/aleskxyz/prometheus-pve-exporter/compare/v3.10.1...v3.11.0
 .. _3.10.1: https://github.com/prometheus-pve/prometheus-pve-exporter/compare/v3.10.0...v3.10.1
 .. _3.10.0: https://github.com/prometheus-pve/prometheus-pve-exporter/compare/v3.9.0...v3.10.0
 .. _3.9.0: https://github.com/prometheus-pve/prometheus-pve-exporter/compare/v3.8.3...v3.9.0
