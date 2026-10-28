@@ -179,6 +179,45 @@ class GuestCreatedCollectorTest(unittest.TestCase):
         self.assertEqual(series(results[3], 'pve_guest_created_timestamp_seconds'),
                          {frozenset({('id', 'qemu/200')}): 5})
 
+    def test_failed_guests_take_turns(self):
+        """A guest that keeps failing slowly does not keep the other failed guests from a retry."""
+        reads, clock, slow = [], itertools.count(), []
+
+        def guest_100(_params):
+            reads.append(100)
+            if slow:  # uses up the read budget
+                for _ in range(10):
+                    next(clock)
+            raise RuntimeError('596 timeout')
+
+        def guest_101(_params):
+            reads.append(101)
+            if not slow:
+                raise RuntimeError('500')
+            return {'meta': 'ctime=5'}
+        vms = [{'type': 'qemu', 'id': f'qemu/{vmid}', 'vmid': vmid, 'node': 'pve1'} for vmid in (100, 101)]
+        api = FakeAPI({'cluster/resources': vms, 'nodes/pve1/qemu/100/config': guest_100,
+                       'nodes/pve1/qemu/101/config': guest_101})
+        with mock.patch('time.monotonic', side_effect=lambda: next(clock)):
+            list(self.collector(api).collect())
+            slow.append(True)
+            results = [samples(self.collector(api).collect()) for _ in range(2)]
+        # both failed; 100 failed longest ago and uses up the budget; then 101
+        # comes first, is read, and leaves time to try 100 once more
+        self.assertEqual(reads, [100, 101, 100, 101, 100])
+        self.assertEqual(series(results[1], 'pve_guest_created_timestamp_seconds'),
+                         {frozenset({('id', 'qemu/101')}): 5})
+
+    def test_scope_returning_after_idle_is_read_again(self):
+        reads = []
+        api = self.api(reads)
+        self.cache = CreatedCache(idle_seconds=10)
+        # clock calls of a scrape of two guests: state, budget, one per read
+        with mock.patch('time.monotonic', side_effect=[0, 1, 2, 3, 100, 101, 102, 103]):
+            list(self.collector(api).collect())
+            list(self.collector(api).collect())
+        self.assertEqual(reads, [100, 101, 100, 101])
+
     def test_failures_are_summarized_not_logged_per_guest(self):
         vms = [{'type': 'qemu', 'id': f'qemu/{vmid}', 'vmid': vmid, 'node': 'pve1'}
                for vmid in range(100, 130)]

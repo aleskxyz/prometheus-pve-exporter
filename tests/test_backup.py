@@ -271,6 +271,22 @@ class BackupJobsCollectorTest(unittest.TestCase):
         self.assertEqual({scope for scope, _ in self.schedules._runs},  # pylint: disable=protected-access
                          {'new'})
 
+    def test_scope_returning_after_idle_keeps_its_schedules(self):
+        """Runs are valid until the next run however long a scope was idle: they are not read again."""
+        calls = []
+
+        def counting(params):
+            calls.append(params)
+            return weekly(params)
+        api = jobs_api(**{'cluster/jobs/schedule-analyze': counting})
+        self.schedules = ScheduleCache(idle_seconds=10)
+        with mock.patch('time.monotonic', side_effect=[0, 100, 200]):
+            self.collect(api)
+            first = len(calls)
+            self.collect(api)
+            self.collect(api)
+        self.assertEqual(len(calls), first)
+
     def test_scopes_keep_their_schedules(self):
         """Modules whose credentials see different jobs do not evict each other's schedules."""
         calls = []
@@ -298,6 +314,23 @@ class BackupJobsCollectorTest(unittest.TestCase):
             list(collector.collect())
 
 
+def task_list(tasks):
+    """
+    The node task list as PVE answers it: source active (running), archive
+    (finished) or all, newest first, at most limit tasks.
+    """
+    if isinstance(tasks, Exception):
+        return tasks
+
+    def answer(params):
+        finished = {'active': False, 'archive': True}.get(params.get('source', 'archive'))
+        listed = [task for task in tasks if finished is None
+                  or bool(task.get('endtime') and task.get('status') not in (None, '', 'RUNNING')) == finished]
+        listed.sort(key=lambda task: -task['starttime'])
+        return listed[:int(params.get('limit', 50))]
+    return answer
+
+
 def tasks_api(pve1_tasks, pve2_tasks):
     """A fake PVE with two online nodes and an offline one, and their vzdump tasks."""
     return FakeAPI({
@@ -307,8 +340,8 @@ def tasks_api(pve1_tasks, pve2_tasks):
             {'type': 'node', 'name': 'pve2', 'online': 1},
             {'type': 'node', 'name': 'pve3', 'online': 0},
         ],
-        'nodes/pve1/tasks': pve1_tasks,
-        'nodes/pve2/tasks': pve2_tasks,
+        'nodes/pve1/tasks': task_list(pve1_tasks),
+        'nodes/pve2/tasks': task_list(pve2_tasks),
     })
 
 
@@ -325,8 +358,8 @@ class BackupTasksCollectorTest(unittest.TestCase):
              {'upid': 'u-warn', 'starttime': SAT - DAY, 'endtime': SAT - DAY + 9, 'status': 'WARNINGS: 1'}])
         result = samples(BackupTasksCollector(api).collect())
         self.assertEqual(api.requests[1:], [
-            (f'nodes/{node}/tasks', {'typefilter': 'vzdump', 'source': 'all', 'limit': 50})
-            for node in ('pve1', 'pve2')])
+            (f'nodes/{node}/tasks', {'typefilter': 'vzdump', 'source': source, 'limit': limit})
+            for node in ('pve1', 'pve2') for source, limit in (('active', 1000), ('archive', 1))])
         pve1, pve2 = frozenset({('node', 'pve1')}), frozenset({('node', 'pve2')})
         self.assertEqual(series(result, 'pve_backup_task_last_start_timestamp_seconds'),
                          {pve1: SAT, pve2: SAT + 60})
@@ -336,6 +369,26 @@ class BackupTasksCollectorTest(unittest.TestCase):
         self.assertEqual(series(result, 'pve_backup_tasks_running'), {pve1: 2, pve2: 0})
         self.assertEqual(series(result, 'pve_backup_task_running_start_timestamp_seconds'),
                          {pve1: SAT + DAY})
+
+    def test_many_running_tasks(self):
+        """More running tasks than one page of the task list: all are counted, the newest finished is kept."""
+        running = [{'upid': f'u-{i}', 'starttime': SAT + i} for i in range(60)]
+        finished = [{'upid': 'u-ok', 'starttime': SAT - DAY, 'endtime': SAT - DAY + 9, 'status': 'OK'}]
+        collector = BackupTasksCollector(tasks_api(running + finished, []))
+        result = samples(collector.collect())
+        pve1 = frozenset({('node', 'pve1')})
+        self.assertEqual(series(result, 'pve_backup_tasks_running')[pve1], 60)
+        self.assertEqual(series(result, 'pve_backup_task_running_start_timestamp_seconds')[pve1], SAT)
+        self.assertEqual(series(result, 'pve_backup_task_last_start_timestamp_seconds')[pve1], SAT - DAY)
+        self.assertIsNone(collector.partial_failure)
+
+    def test_too_many_running_tasks_are_reported(self):
+        running = [{'upid': f'u-{i}', 'starttime': SAT + i} for i in range(5)]
+        collector = BackupTasksCollector(tasks_api(running, []))
+        with mock.patch.object(backup, 'ACTIVE_TASK_LIMIT', 5):
+            list(collector.collect())
+        self.assertEqual(collector.partial_failure,
+                         'nodes pve1 have 5 or more running vzdump tasks, more than are listed')
 
     def test_warnings_are_success(self):
         api = tasks_api([{'upid': 'u', 'starttime': SAT, 'endtime': SAT + 9, 'status': 'WARNINGS: 2'}], [])

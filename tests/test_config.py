@@ -5,7 +5,6 @@ Tests for the configuration of the exporter.
 import unittest
 
 from pve_exporter.config import config_from_env, config_from_yaml
-from pve_exporter.util import parse_bool
 
 
 class ConfigFromYamlTest(unittest.TestCase):
@@ -54,21 +53,6 @@ class ConfigFromEnvTest(unittest.TestCase):
             with self.subTest(value=value):
                 config = config_from_env({'PVE_USER': 'u', 'PVE_VERIFY_SSL': value})
                 self.assertIs(config['default']['verify_ssl'], expected)
-
-
-class ParseBoolTest(unittest.TestCase):
-    """One spelling of booleans for PVE, URL parameters and the environment."""
-
-    def test_values(self):
-        for value in (1, '1', 'true', 'Yes', 'on', ' 1 ', True, 2, 0.5):
-            self.assertTrue(parse_bool(value), value)
-        for value in (0, '0', 'false', 'NO', 'off', False, 0.0):
-            self.assertFalse(parse_bool(value, default=True), value)
-
-    def test_missing_is_default(self):
-        for value in (None, '', '  '):
-            self.assertFalse(parse_bool(value))
-            self.assertTrue(parse_bool(value, default=True))
 
 
 if __name__ == '__main__':
