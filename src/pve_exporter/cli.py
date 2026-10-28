@@ -10,68 +10,42 @@ from pve_exporter import scrape_metrics
 from pve_exporter.http import start_http_server
 from pve_exporter.config import config_from_yaml
 from pve_exporter.config import config_from_env
-from pve_exporter.collector import CollectorsOptions
+from pve_exporter.collector import CLUSTER, COLLECTORS, NODE, CollectorsOptions
 
 
-def main():
+def build_parser():
     """
-    Main entry point.
+    Return the command line parser, with a flag per collector.
     """
 
     parser = ArgumentParser()
-    clusterflags = parser.add_argument_group('cluster collectors', description=(
-        'cluster collectors are run if the url parameter cluster=1 is set and '
-        'skipped if the url parameter cluster=0 is set on a scrape url.'
-    ))
-    clusterflags.add_argument('--collector.status', dest='collector_status',
-                              action=BooleanOptionalAction, default=True,
-                              help='Exposes Node/VM/CT-Status')
-    clusterflags.add_argument('--collector.version', dest='collector_version',
-                              action=BooleanOptionalAction, default=True,
-                              help='Exposes PVE version info')
-    clusterflags.add_argument('--collector.node', dest='collector_node',
-                              action=BooleanOptionalAction, default=True,
-                              help='Exposes PVE node info')
-    clusterflags.add_argument('--collector.cluster', dest='collector_cluster',
-                              action=BooleanOptionalAction, default=True,
-                              help='Exposes PVE cluster info')
-    clusterflags.add_argument('--collector.resources', dest='collector_resources',
-                              action=BooleanOptionalAction, default=True,
-                              help='Exposes PVE resources info')
-    clusterflags.add_argument('--collector.resources.sparse-states',
-                              dest='collector_resources_sparse_states',
-                              action=BooleanOptionalAction, default=False,
-                              help=('Only exposes pve_ha_state for HA managed guests and '
-                                    'pve_lock_state for the lock a guest currently holds'))
-    clusterflags.add_argument('--collector.backup-info', dest='collector_backup_info',
-                              action=BooleanOptionalAction, default=True,
-                              help=('Exposes information about guests which are not '
-                                    'covered by any backup job'))
-    clusterflags.add_argument('--collector.qdevice', dest='collector_qdevice',
-                              action=BooleanOptionalAction, default=True,
-                              help='Exposes PVE QDevice connection state')
-
-    nodeflags = parser.add_argument_group('node collectors', description=(
-        'node collectors are run if the url parameter node=1 is set and '
-        'skipped if the url parameter node=0 is set on a scrape url.'
-    ))
-    nodeflags.add_argument('--collector.config', dest='collector_config',
-                           action=BooleanOptionalAction, default=True,
-                           help='Exposes PVE onboot status')
-
-    nodeflags.add_argument('--collector.replication', dest='collector_replication',
-                           action=BooleanOptionalAction, default=True,
-                           help='Exposes PVE replication info')
-    nodeflags.add_argument('--collector.subscription', dest='collector_subscription',
-                              action=BooleanOptionalAction, default=True,
-                              help='Exposes PVE subscription info')
+    groups = {
+        CLUSTER: parser.add_argument_group('cluster collectors', description=(
+            'cluster collectors are run if the url parameter cluster=1 is set and '
+            'skipped if the url parameter cluster=0 is set on a scrape url.'
+        )),
+        NODE: parser.add_argument_group('node collectors', description=(
+            'node collectors are run if the url parameter node=1 is set and '
+            'skipped if the url parameter node=0 is set on a scrape url.'
+        )),
+    }
+    for spec in COLLECTORS:
+        groups[spec.scope].add_argument(spec.flag, dest=f'collector_{spec.name}',
+                                        action=BooleanOptionalAction, default=spec.default,
+                                        help=spec.help)
+    groups[CLUSTER].add_argument('--collector.resources.sparse-states',
+                                 dest='collector_resources_sparse_states',
+                                 action=BooleanOptionalAction, default=False,
+                                 help=('Only exposes pve_guest_ha_state for HA managed guests '
+                                       'and pve_guest_lock_state for the lock a guest '
+                                       'currently holds'))
 
     scrapeflags = parser.add_argument_group('scrape collectors', description=(
         'metrics concerning the operation of the Prometheus PVE exporter itself.'
     ))
     scrapeflags.add_argument('--collector.pve-api-metrics', dest='api_metrics_enabled',
                               action=BooleanOptionalAction, default=False,
-                              help='Exposes duration of PVE API calls')
+                              help='Exposes duration and errors of PVE API requests per endpoint')
     scrapeflags.add_argument('--collector.target-metrics', dest='target_metrics_enabled',
                               action=BooleanOptionalAction, default=False,
                               help='Exposes duration of scrapes by target')
@@ -91,21 +65,27 @@ def main():
     parser.add_argument('--server.certfile', dest='server_certfile',
                         help='SSL certificate for server')
 
+    return parser
+
+
+def options_from_args(params) -> CollectorsOptions:
+    """
+    Return the collector options of the parsed command line.
+    """
+    return CollectorsOptions(
+        sparse_states=params.collector_resources_sparse_states,
+        **{spec.name: getattr(params, f'collector_{spec.name}') for spec in COLLECTORS})
+
+
+def main():
+    """
+    Main entry point.
+    """
+
+    parser = build_parser()
     params = parser.parse_args()
 
-    collectors = CollectorsOptions(
-        status=params.collector_status,
-        version=params.collector_version,
-        subscription=params.collector_subscription,
-        node=params.collector_node,
-        cluster=params.collector_cluster,
-        resources=params.collector_resources,
-        backup_info=params.collector_backup_info,
-        config=params.collector_config,
-        replication=params.collector_replication,
-        qdevice=params.collector_qdevice,
-        sparse_states=params.collector_resources_sparse_states
-    )
+    collectors = options_from_args(params)
     scrape_metrics.API_METRICS_ENABLED = params.api_metrics_enabled
     scrape_metrics.TARGET_METRICS_ENABLED = params.target_metrics_enabled
 

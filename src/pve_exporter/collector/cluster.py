@@ -1,55 +1,73 @@
 """
-Prometheus collecters for Proxmox VE cluster.
+Prometheus collectors for Proxmox VE cluster wide state and configuration.
 """
 # pylint: disable=too-few-public-methods
 
 import itertools
+import logging
 import typing
 
 from prometheus_client.core import GaugeMetricFamily, CounterMetricFamily
 from proxmoxer import ResourceException
 
+from pve_exporter.collector.common import (
+    GUEST_TYPES,
+    StateSetMetric,
+    cluster_entry,
+    cluster_id,
+    families,
+    flag,
+    label,
+    labels,
+    resources,
+)
+
+LOG = logging.getLogger('gunicorn.error')
+
 
 class StatusCollector:
     """
-    Collects Proxmox VE Node/VM/CT-Status
+    Collects the state of nodes, the cluster, guests and storages. E.g.:
 
-    # HELP pve_up Node/VM/CT-Status is online/running
-    # TYPE pve_up gauge
-    pve_up{id="node/proxmox-host"} 1.0
-    pve_up{id="cluster/pvec"} 1.0
-    pve_up{id="lxc/101"} 1.0
-    pve_up{id="qemu/102"} 1.0
+    # HELP pve_node_online Whether the node is online
+    pve_node_online{id="node/proxmox-host"} 1.0
+    pve_cluster_quorate{id="cluster/pvec"} 1.0
+    pve_guest_running{id="qemu/102"} 1.0
+    pve_storage_available{id="storage/proxmox-host/local"} 1.0
     """
 
     def __init__(self, pve):
         self._pve = pve
 
     def collect(self):  # pylint: disable=missing-docstring
-        status_metrics = GaugeMetricFamily(
-            'pve_up',
-            'Node/VM/CT-Status is online/running',
+        node_online = GaugeMetricFamily(
+            'pve_node_online', 'Whether the node is online (/cluster/status).', labels=['id'])
+        cluster_quorate = GaugeMetricFamily(
+            'pve_cluster_quorate', 'Whether the cluster is quorate (/cluster/status).',
+            labels=['id'])
+        guest_running = GaugeMetricFamily(
+            'pve_guest_running', 'Whether the guest is running (status of /cluster/resources).',
+            labels=['id'])
+        storage_available = GaugeMetricFamily(
+            'pve_storage_available',
+            'Whether the storage is available on the node (status of /cluster/resources).',
             labels=['id'])
 
         for entry in self._pve.cluster.status.get():
             if entry['type'] == 'node':
-                label_values = [entry['id']]
-                status_metrics.add_metric(label_values, entry['online'])
+                node_online.add_metric([entry['id']], entry['online'])
             elif entry['type'] == 'cluster':
-                label_values = [f"cluster/{entry['name']}"]
-                status_metrics.add_metric(label_values, entry['quorate'])
+                cluster_quorate.add_metric([cluster_id(entry)], entry['quorate'])
             else:
-                raise ValueError(f"Got unexpected status entry type {entry['type']}")
+                LOG.debug('Skipping cluster status entry of type %s', entry['type'])
 
-        for resource in self._pve.cluster.resources.get(type='vm'):
-            label_values = [resource['id']]
-            status_metrics.add_metric(label_values, resource['status'] == 'running')
+        for resource in resources(self._pve, *GUEST_TYPES):
+            guest_running.add_metric([resource['id']], resource.get('status') == 'running')
 
-        for resource in self._pve.cluster.resources.get(type='storage'):
-            label_values = [resource['id']]
-            status_metrics.add_metric(label_values, resource['status'] == 'available')
+        for resource in resources(self._pve, 'storage'):
+            storage_available.add_metric([resource['id']], resource.get('status') == 'available')
 
-        yield status_metrics
+        yield from (node_online, cluster_quorate, guest_running, storage_available)
 
 
 class VersionCollector:
@@ -61,22 +79,20 @@ class VersionCollector:
     pve_version_info{release="15",repoid="7599e35a",version="4.4"} 1.0
     """
 
-    LABEL_WHITELIST = ['release', 'repoid', 'version']
+    LABELS = ['release', 'repoid', 'version']
 
     def __init__(self, pve):
         self._pve = pve
 
     def collect(self):  # pylint: disable=missing-docstring
-        version_items = self._pve.version.get().items()
-        version = {key: value for key, value in version_items if key in self.LABEL_WHITELIST}
-
-        labels, label_values = zip(*version.items())
+        version = self._pve.version.get()
         metric = GaugeMetricFamily(
             'pve_version_info',
             'Proxmox VE version info',
-            labels=labels
+            labels=self.LABELS
         )
-        metric.add_metric(label_values, 1)
+        if any(key in version for key in self.LABELS):
+            metric.add_metric(labels(version, self.LABELS), 1)
 
         yield metric
 
@@ -91,24 +107,17 @@ class ClusterNodeCollector:
         nodeid="0"} 1.0
     """
 
+    LABELS = ['id', 'level', 'name', 'nodeid']
+
     def __init__(self, pve):
         self._pve = pve
 
     def collect(self):  # pylint: disable=missing-docstring
-        nodes = [entry for entry in self._pve.cluster.status.get() if entry['type'] == 'node']
-        labels = ['id', 'level', 'name', 'nodeid']
-
-        if nodes:
-            info_metrics = GaugeMetricFamily(
-                'pve_node_info',
-                'Node info',
-                labels=labels)
-
-            for node in nodes:
-                label_values = [str(node[key]) for key in labels]
-                info_metrics.add_metric(label_values, 1)
-
-            yield info_metrics
+        info_metrics = GaugeMetricFamily('pve_node_info', 'Node info', labels=self.LABELS)
+        for entry in self._pve.cluster.status.get():
+            if entry['type'] == 'node':
+                info_metrics.add_metric(labels(entry, self.LABELS), 1)
+        yield info_metrics
 
 
 class ClusterInfoCollector:
@@ -117,37 +126,26 @@ class ClusterInfoCollector:
 
     # HELP pve_cluster_info Cluster info
     # TYPE pve_cluster_info gauge
-    pve_cluster_info{id="cluster/pvec",nodes="2",quorate="1",version="2"} 1.0
+    pve_cluster_info{id="cluster/pvec",version="2"} 1.0
+    pve_cluster_nodes{id="cluster/pvec"} 2.0
     """
 
     def __init__(self, pve):
         self._pve = pve
 
     def collect(self):  # pylint: disable=missing-docstring
-        clusters = [entry for entry in self._pve.cluster.status.get() if entry['type'] == 'cluster']
-
-        if clusters:
-            # Remove superflous keys.
-            for cluster in clusters:
-                del cluster['type']
-
-            # Add cluster-prefix to id.
-            for cluster in clusters:
-                cluster['id'] = f"cluster/{cluster['name']}"
-                del cluster['name']
-
-            # Yield remaining data.
-            labels = clusters[0].keys()
-            info_metrics = GaugeMetricFamily(
-                'pve_cluster_info',
-                'Cluster info',
-                labels=labels)
-
-            for cluster in clusters:
-                label_values = [str(cluster[key]) for key in labels]
-                info_metrics.add_metric(label_values, 1)
-
-            yield info_metrics
+        info = GaugeMetricFamily(
+            'pve_cluster_info', 'Cluster info (version of the cluster configuration), always 1.',
+            labels=['id', 'version'])
+        nodes = GaugeMetricFamily(
+            'pve_cluster_nodes', 'Number of nodes of the cluster.', labels=['id'])
+        entry = cluster_entry(self._pve)
+        if entry is not None:
+            info.add_metric([cluster_id(entry), label(entry.get('version'))], 1)
+            if entry.get('nodes') is not None:
+                nodes.add_metric([cluster_id(entry)], entry['nodes'])
+        yield info
+        yield nodes
 
 
 class QDeviceCollector:
@@ -161,171 +159,125 @@ class QDeviceCollector:
     # HELP pve_qdevice_info Proxmox VE QDevice info (1 if configured)
     # TYPE pve_qdevice_info gauge
     pve_qdevice_info{id="cluster/pvec",model="Net",algorithm="Fifty-Fifty split",
-        qnetd_host="10.0.0.1:5403",tie_breaker="Node with lowest node ID",
-        state="Connected"} 1.0
+        qnetd_host="10.0.0.1:5403",tie_breaker="Node with lowest node ID"} 1.0
     """
 
-    # Maps API response keys to Prometheus label names.
+    # Maps API response keys to Prometheus label names; the state is the value
+    # of pve_qdevice_up.
     LABEL_MAP = {
         'Model': 'model',
         'Algorithm': 'algorithm',
         'QNetd host': 'qnetd_host',
         'Tie-breaker': 'tie_breaker',
-        'State': 'state',
     }
 
     def __init__(self, pve):
         self._pve = pve
 
     def collect(self):  # pylint: disable=missing-docstring
-        cluster_id = None
-        for entry in self._pve.cluster.status.get():
-            if entry['type'] == 'cluster':
-                cluster_id = f"cluster/{entry['name']}"
-                break
-
-        if cluster_id is None:
+        entry = cluster_entry(self._pve)
+        if entry is None:
             return
+        id_ = cluster_id(entry)
 
         try:
             qdevice = self._pve.cluster.config.qdevice.get()
-        except ResourceException:
-            # No QDevice configured on this cluster.
-            return
+        except ResourceException as error:
+            # PVE versions without the QDevice API; other errors, e.g. missing
+            # permissions, fail the collector.
+            if error.status_code == 501:
+                return
+            raise
 
+        # Without a QDevice, PVE answers an empty object.
         if not qdevice:
             return
-
-        label_names = ['id'] + list(self.LABEL_MAP.values())
-        label_values = [cluster_id] + [
-            str(qdevice.get(api_key, '')) for api_key in self.LABEL_MAP
-        ]
 
         info_metric = GaugeMetricFamily(
             'pve_qdevice_info',
             'Proxmox VE QDevice info (1 if configured)',
-            labels=label_names)
-        info_metric.add_metric(label_values, 1)
+            labels=['id'] + list(self.LABEL_MAP.values()))
+        info_metric.add_metric([id_] + labels(qdevice, list(self.LABEL_MAP)), 1)
 
         up_metric = GaugeMetricFamily(
             'pve_qdevice_up',
             'Proxmox VE QDevice is connected (1) or not (0)',
             labels=['id'])
-        up_metric.add_metric([cluster_id], qdevice.get('State') == 'Connected')
+        up_metric.add_metric([id_], qdevice.get('State') == 'Connected')
 
         yield up_metric
         yield info_metric
 
 
-class HighAvailabilityStateMetric(GaugeMetricFamily):
+class StorageConfigCollector:
     """
-    A single gauge representing PVE ha state.
-    """
+    Collects the storage configuration (cluster wide, from /storage). E.g.:
 
-    GUEST_STATES = [
-        'stopped',
-        'request_stop',
-        'request_start',
-        'request_start_balance',
-        'started',
-        'fence',
-        'recovery',
-        'migrate',
-        'relocate',
-        'freeze',
-        'error',
-    ]
-
-    NODE_STATES = ['online', 'maintenance', 'unknown', 'fence', 'gone']
-
-    STATES = {
-        'lxc': GUEST_STATES,
-        'qemu': GUEST_STATES,
-        'node': NODE_STATES,
-    }
-
-    def __init__(self, sparse: bool = False):
-        super().__init__(
-            'pve_ha_state',
-            'HA service status (for HA managed VMs).',
-            labels=['id', 'state']
-        )
-        self._sparse = sparse
-
-    def add_metric_from_resource(self, resource: dict):
-        """Inspect resource and add suitable metric- to the metric family.
-
-        Args:
-          resource: A PVE cluster resource
-        """
-        restype = resource['type']
-        if restype in self.STATES:
-            # In sparse mode, skip guests which are not managed by HA.
-            if self._sparse and restype != 'node' and not resource.get('hastate'):
-                return
-
-            for state in self.STATES[restype]:
-                value = resource.get('hastate', None) == state
-                self.add_metric([resource['id'], state], value)
-
-
-class LockStateMetric(GaugeMetricFamily):
-    """
-    A single gauge representing PVE guest lock state.
+    # HELP pve_storage_config_info Storage configuration
+    # TYPE pve_storage_config_info gauge
+    pve_storage_config_info{storage="pbs1",type="pbs",server="10.0.0.1",port="",
+        datastore="store1",datastore_namespace="dc1",fingerprint="aa:bb",disabled="0"} 1.0
     """
 
-    GUEST_STATES = [
-        'backup',
-        'clone',
-        'create',
-        'migrate',
-        'rollback',
-        'snapshot',
-        'snapshot-delete',
-        'suspended',
-        'suspending',
-    ]
+    def __init__(self, pve):
+        self._pve = pve
 
-    STATES = {
-        'qemu': GUEST_STATES,
-        'lxc': GUEST_STATES,
-    }
+    def collect(self):  # pylint: disable=missing-docstring
+        info = GaugeMetricFamily(
+            'pve_storage_config_info',
+            ('Storage configuration, always 1. Keys a storage type does not have are empty; '
+             'fingerprint is lower case.'),
+            labels=['storage', 'type', 'server', 'port', 'datastore', 'datastore_namespace',
+                    'fingerprint', 'disabled'])
+        for storage in self._pve.storage.get():
+            info.add_metric(
+                labels(storage, ['storage', 'type', 'server', 'port', 'datastore', 'namespace'])
+                + [label(storage.get('fingerprint')).strip().lower(), flag(storage.get('disable'))],
+                1)
+        yield info
 
-    def __init__(self, sparse: bool = False):
-        super().__init__(
-            'pve_lock_state',
-            "The guest's current config lock (for types 'qemu' and 'lxc')",
-            labels=['id', 'state']
-        )
-        self._sparse = sparse
 
-    def add_metric_from_resource(self, resource: dict):
-        """Inspect resource and add suitable metric- to the metric family.
+HA_GUEST_STATES = [
+    'stopped',
+    'request_stop',
+    'request_start',
+    'request_start_balance',
+    'started',
+    'fence',
+    'recovery',
+    'migrate',
+    'relocate',
+    'freeze',
+    'error',
+]
 
-        Args:
-          resource: A PVE cluster resource
-        """
-        restype = resource['type']
-        if restype in self.STATES:
-            # In sparse mode, only expose the lock the guest currently holds.
-            if self._sparse:
-                lock = resource.get('lock', None)
-                if lock in self.STATES[restype]:
-                    self.add_metric([resource['id'], lock], 1)
-                return
+HA_NODE_STATES = ['online', 'maintenance', 'unknown', 'fence', 'gone']
 
-            for state in self.STATES[restype]:
-                value = resource.get('lock', None) == state
-                self.add_metric([resource['id'], state], value)
+# qemu and LXC locks
+LOCK_STATES = [
+    'backup',
+    'clone',
+    'create',
+    'destroyed',
+    'disk',
+    'fstrim',
+    'migrate',
+    'mounted',
+    'rollback',
+    'snapshot',
+    'snapshot-delete',
+    'suspended',
+    'suspending',
+]
 
 
 class ClusterResourcesCollector:
     """
-    Collects Proxmox VE cluster resources information, i.e. memory, storage, cpu
-    usage for cluster nodes and guests.
+    Collects the usage of nodes, guests and storages from /cluster/resources,
+    one set of metrics per kind of resource.
 
-    If sparse_states is set, pve_ha_state is only exposed for HA managed guests
-    and pve_lock_state only for the lock a guest currently holds.
+    If sparse_states is set, pve_guest_ha_state is only exposed for HA managed
+    guests and pve_guest_lock_state only for the lock a guest currently holds.
     """
 
     def __init__(self, pve, sparse_states: bool = False):
@@ -333,243 +285,87 @@ class ClusterResourcesCollector:
         self._sparse_states = sparse_states
 
     def collect(self):  # pylint: disable=missing-docstring
-        metrics = {
-            'maxdisk': GaugeMetricFamily(
-                'pve_disk_size_bytes',
-                (
-                    "Storage size in bytes (for type 'storage'), root image size for VMs "
-                    "(for types 'qemu' and 'lxc')."
-                ),
-                labels=['id']),
-            'disk': GaugeMetricFamily(
-                'pve_disk_usage_bytes',
-                (
-                    "Used disk space in bytes (for type 'storage'), used root filesystem space "
-                    "(for types 'node' and 'lxc'). Not exposed for type 'qemu' while PVE "
-                    "reports 0."
-                ),
-                labels=['id']),
-            'maxmem': GaugeMetricFamily(
-                'pve_memory_size_bytes',
-                "Number of available memory in bytes (for types 'node', 'qemu' and 'lxc').",
-                labels=['id']),
-            'mem': GaugeMetricFamily(
-                'pve_memory_usage_bytes',
-                "Used memory in bytes (for types 'node', 'qemu' and 'lxc').",
-                labels=['id']),
-            'netout': GaugeMetricFamily(
-                'pve_network_transmit_bytes',
-                (
-                    "The amount of traffic in bytes that was sent from the guest over the network "
-                    "since it was started. (for types 'qemu' and 'lxc') "
-                    "DEPRECATED: Use pve_network_transmit_bytes_total instead."
-                ),
-                labels=['id']),
-            'netin': GaugeMetricFamily(
-                'pve_network_receive_bytes',
-                (
-                    "The amount of traffic in bytes that was sent to the guest over the network "
-                    "since it was started. (for types 'qemu' and 'lxc') "
-                    "DEPRECATED: Use pve_network_receive_bytes_total instead."
-                ),
-                labels=['id']),
-            'diskwrite': GaugeMetricFamily(
-                'pve_disk_write_bytes',
-                (
-                    "The amount of bytes the guest wrote to its block devices since the guest was "
-                    "started. This info is not available for all storage types. "
-                    "(for types 'qemu' and 'lxc') "
-                    "DEPRECATED: Use pve_disk_written_bytes_total instead."
-                ),
-                labels=['id']),
-            'diskread': GaugeMetricFamily(
-                'pve_disk_read_bytes',
-                (
-                    "The amount of bytes the guest read from its block devices since the guest was "
-                    "started. This info is not available for all storage types. "
-                    "(for types 'qemu' and 'lxc') "
-                    "DEPRECATED: Use pve_disk_read_bytes_total instead."
-                ),
-                labels=['id']),
-            'cpu': GaugeMetricFamily(
-                'pve_cpu_usage_ratio',
-                "CPU utilization (for types 'node', 'qemu' and 'lxc').",
-                labels=['id']),
-            'maxcpu': GaugeMetricFamily(
-                'pve_cpu_usage_limit',
-                "Number of available CPUs (for types 'node', 'qemu' and 'lxc').",
-                labels=['id']),
-            'uptime': GaugeMetricFamily(
-                'pve_uptime_seconds',
-                "Uptime of node or virtual guest in seconds (for types 'node', 'qemu' and 'lxc').",
-                labels=['id']),
-            'shared': GaugeMetricFamily(
-                'pve_storage_shared',
-                'Whether or not the storage is shared among cluster nodes',
-                labels=['id']),
-        }
+        node_metrics = families('pve_node', {
+            'cpu': ('cpu_usage_ratio', 'CPU utilization of the node.'),
+            'maxcpu': ('cpus', 'Number of CPUs of the node.'),
+            'mem': ('memory_usage_bytes', 'Used memory of the node.'),
+            'maxmem': ('memory_size_bytes', 'Memory of the node.'),
+            'disk': ('rootfs_usage_bytes', 'Used space of the root file system of the node.'),
+            'maxdisk': ('rootfs_size_bytes', 'Size of the root file system of the node.'),
+            'uptime': ('uptime_seconds', 'Uptime of the node.'),
+        })
+        guest_metrics = families('pve_guest', {
+            'cpu': ('cpu_usage_ratio', 'CPU utilization of the guest.'),
+            'maxcpu': ('cpus', 'Number of virtual CPUs of the guest.'),
+            'mem': ('memory_usage_bytes', 'Used memory of the guest.'),
+            'maxmem': ('memory_size_bytes', 'Memory of the guest.'),
+            'disk': ('disk_usage_bytes',
+                     'Used space of the root file system of a container; not exposed for VMs, '
+                     'as PVE can not see inside them and reports 0.'),
+            'maxdisk': ('disk_size_bytes', 'Size of the root disk of the guest.'),
+            'uptime': ('uptime_seconds', 'Uptime of the guest.'),
+        })
+        guest_counters = families('pve_guest', {
+            'netin': ('network_receive_bytes',
+                      'Bytes the guest received over the network since it was started.'),
+            'netout': ('network_transmit_bytes',
+                       'Bytes the guest sent over the network since it was started.'),
+            'diskread': ('disk_read_bytes',
+                         'Bytes the guest read from its block devices since it was started '
+                         '(not for all storage types).'),
+            'diskwrite': ('disk_written_bytes',
+                          'Bytes the guest wrote to its block devices since it was started '
+                          '(not for all storage types).'),
+        }, cls=CounterMetricFamily)
+        storage_metrics = families('pve_storage', {
+            'disk': ('usage_bytes', 'Used space of the storage on the node.'),
+            'maxdisk': ('size_bytes', 'Size of the storage on the node.'),
+            'shared': ('shared', 'Whether the storage is shared among cluster nodes.'),
+        })
 
-        counter_metrics = {
-            'netout': CounterMetricFamily(
-                'pve_network_transmit_bytes_total',
-                (
-                    "The amount of traffic in bytes that was sent from the guest over the network "
-                    "since it was started. (for types 'qemu' and 'lxc')"
-                ),
-                labels=['id']),
-            'netin': CounterMetricFamily(
-                'pve_network_receive_bytes_total',
-                (
-                    "The amount of traffic in bytes that was sent to the guest over the network "
-                    "since it was started. (for types 'qemu' and 'lxc')"
-                ),
-                labels=['id']),
-            'diskwrite': CounterMetricFamily(
-                'pve_disk_written_bytes_total',
-                (
-                    "The amount of bytes the guest wrote to its block devices since the guest was "
-                    "started. This info is not available for all storage types. "
-                    "(for types 'qemu' and 'lxc')"
-                ),
-                labels=['id']),
-            'diskread': CounterMetricFamily(
-                'pve_disk_read_bytes_total',
-                (
-                    "The amount of bytes the guest read from its block devices since the guest was "
-                    "started. This info is not available for all storage types. "
-                    "(for types 'qemu' and 'lxc')"
-                ),
-                labels=['id']),
-        }
+        node_ha = StateSetMetric(
+            'pve_node_ha_state', 'HA state of the node.', HA_NODE_STATES)
+        guest_ha = StateSetMetric(
+            'pve_guest_ha_state', 'HA state of the guest (for HA managed guests).',
+            HA_GUEST_STATES)
+        lock_metric = StateSetMetric(
+            'pve_guest_lock_state', "The guest's current config lock", LOCK_STATES)
 
-        ha_metric = HighAvailabilityStateMetric(sparse=self._sparse_states)
-        lock_metric = LockStateMetric(sparse=self._sparse_states)
+        guest_labels = ['id', 'vmid', 'node', 'name', 'type', 'template', 'tags', 'pool']
+        guest_info = GaugeMetricFamily('pve_guest_info', 'VM/CT info', labels=guest_labels)
+        storage_info = GaugeMetricFamily(
+            'pve_storage_info', 'Storage info',
+            labels=['id', 'node', 'storage', 'plugintype', 'content'])
 
-        info_metrics = {
-            'guest': GaugeMetricFamily(
-                'pve_guest_info',
-                'VM/CT info',
-                labels=['id', 'node', 'name', 'type', 'template', 'tags']),
-            'storage': GaugeMetricFamily(
-                'pve_storage_info',
-                'Storage info',
-                labels=['id', 'node', 'storage', 'plugintype', 'content']),
-        }
-
-        info_lookup = {
-            'lxc': {
-                'labels': ['id', 'node', 'name', 'type', 'template', 'tags'],
-                'gauge': info_metrics['guest'],
-            },
-            'qemu': {
-                'labels': ['id', 'node', 'name', 'type', 'template', 'tags'],
-                'gauge': info_metrics['guest'],
-            },
-            'storage': {
-                'labels': ['id', 'node', 'storage', 'plugintype'],
-                'csv_labels': ['content'],
-                'gauge': info_metrics['storage'],
-            },
-        }
-
+        # Pools (PVE 9+) report the sum of their members and other resource
+        # types have no metrics: both are skipped.
         for resource in self._pve.cluster.resources.get():
             restype = resource['type']
-
-            # Pools (PVE 9+) report the sum of their members. Exposing them
-            # would double count guests in every aggregation over these metrics.
-            if restype == 'pool':
-                continue
-
-            if restype in info_lookup:
-                all_labels = self._extract_resource_labels(info_lookup[restype], resource)
-                info_lookup[restype]['gauge'].add_metric(all_labels, 1)
-
-            ha_metric.add_metric_from_resource(resource)
-            lock_metric.add_metric_from_resource(resource)
-
-            label_values = [resource['id']]
-            for key, metric_value in resource.items():
+            if restype == 'node':
+                node_ha.add_states(resource['id'], resource.get('hastate'))
+                self._add_values(node_metrics, resource)
+            elif restype in GUEST_TYPES:
+                guest_info.add_metric(labels(resource, guest_labels), 1)
+                # In sparse mode, guests not managed by HA have no HA state.
+                if not self._sparse_states or resource.get('hastate'):
+                    guest_ha.add_states(resource['id'], resource.get('hastate'))
+                lock_metric.add_states(resource['id'], resource.get('lock'),
+                                       only_current=self._sparse_states)
                 # PVE cannot see inside qemu guests and reports a disk usage of 0.
-                if restype == 'qemu' and key == 'disk' and not metric_value:
-                    continue
-                if key in metrics:
-                    metrics[key].add_metric(label_values, metric_value)
-                if key in counter_metrics:
-                    counter_metrics[key].add_metric(label_values, metric_value)
+                skip = {'disk'} if restype == 'qemu' and not resource.get('disk') else set()
+                self._add_values(guest_metrics, resource, skip)
+                self._add_values(guest_counters, resource)
+            elif restype == 'storage':
+                storage_info.add_metric(
+                    labels(resource, ['id', 'node', 'storage', 'plugintype'], ['content']), 1)
+                self._add_values(storage_metrics, resource)
 
         return itertools.chain(
-            metrics.values(),
-            counter_metrics.values(),
-            [ha_metric, lock_metric],
-            info_metrics.values()
-        )
+            node_metrics.values(), guest_metrics.values(), guest_counters.values(),
+            storage_metrics.values(), [node_ha, guest_ha, lock_metric, guest_info, storage_info])
 
-    def _extract_resource_labels(self, resource_lookup_info: dict[str, typing.Any],
-                                 api_response_resource: dict[str, typing.Any]) -> list[str]:
-        """Extract resource labels from the PVE API response.
-
-        Returns:
-            list[str]: A list of labels.
-        """
-        labels = resource_lookup_info['labels']
-        label_values = [str(api_response_resource.get(key, ''))
-                        for key in labels]
-
-        # Labels with comma-separated values are randomly ordered by
-        # Proxmox. This causes different metrics on every scrape, which
-        # results in both churn rate and cardinality to explode.
-        # Split the list up, sort it, and rejoin to avoid this.
-        csv_labels = resource_lookup_info.get('csv_labels') or []
-        csv_label_values_unsorted = [
-            str(api_response_resource.get(key, '')) for key in csv_labels
-        ]
-
-        csv_label_values = []
-        for label_value in csv_label_values_unsorted:
-            split_values = label_value.split(',')
-            split_values.sort()
-            sorted_values = ','.join(split_values)
-            csv_label_values.append(sorted_values)
-
-        return label_values + csv_label_values
-
-class BackupInfoCollector:
-    """
-    Collects information on guests which are not covered by any backup job. E.g.:
-
-    pve_not_backed_up_total{id="cluster/pvec"} 2.0
-    pve_not_backed_up_info{id="qemu/102"} 1.0
-    """
-
-    def __init__(self, pve):
-        self._pve = pve
-
-    def collect(self):  # pylint: disable=missing-docstring
-        not_enabled_total = GaugeMetricFamily(
-            'pve_not_backed_up_total',
-            'Total number of guests not covered by any backup job.',
-            labels=['id']
-        )
-        not_enabled_info = GaugeMetricFamily(
-            'pve_not_backed_up_info',
-            'Present if guest is not covered by any backup job.',
-            labels=['id']
-        )
-
-        not_enabled_data = self._pve.cluster("backup-info/not-backed-up").get()
-        cluster_name = next((entry['name'] for entry in self._pve.cluster.status.get()
-                             if entry['type'] == 'cluster'), None)
-
-        for entry in not_enabled_data:
-            label_values = [f"{entry['type']}/{entry['vmid']}"]
-            not_enabled_info.add_metric(label_values, 1)
-
-        # Standalone nodes have no cluster entry to attach the total to.
-        if cluster_name is not None:
-            not_enabled_total.add_metric(
-                [f"cluster/{cluster_name}"],
-                len(not_enabled_data)
-            )
-
-        yield not_enabled_total
-        yield not_enabled_info
+    @staticmethod
+    def _add_values(metric_families: dict, resource: dict, skip: typing.Container = ()):
+        for key, family in metric_families.items():
+            if key in resource and key not in skip:
+                family.add_metric([resource['id']], resource[key])

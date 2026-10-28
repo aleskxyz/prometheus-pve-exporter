@@ -4,6 +4,8 @@ Config module for Proxmox VE prometheus collector.
 
 from collections.abc import Mapping
 
+from pve_exporter.util import parse_bool
+
 def config_from_yaml(yaml):
     """
     Given a dictionary parsed from a yaml file return a config object.
@@ -51,12 +53,7 @@ def config_from_env(env):
     confvals = {confkey: env[envkey] for envkey, confkey in envmap.items() if envkey in env}
 
     if 'PVE_VERIFY_SSL' in env:
-        confvals['verify_ssl'] = env['PVE_VERIFY_SSL'].lower() not in ['false', '0']
-
-    if not confvals:
-        return ConfigInvalid(
-            "Empty dictionary. No pve API parameters specified."
-        )
+        confvals['verify_ssl'] = parse_bool(env['PVE_VERIFY_SSL'], default=True)
 
     allow_list = None
     if 'PVE_ALLOW_LIST' in env:
