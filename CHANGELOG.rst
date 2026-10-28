@@ -9,6 +9,106 @@ The format is based on `Keep a Changelog`_ and this project adheres to
 `Unreleased`_
 -------------
 
+Added
+~~~~~
+
+- ``backup-jobs`` collector (on by default): backup jobs, the guests each job
+  selects (``included_volumes``), the previous, last and next scheduled run of
+  enabled jobs (``schedule-analyze``, cached per module and target until the
+  next run), excluded volumes and unknown VMIDs.
+- ``guest-created`` collector (on by default): ``pve_guest_created_timestamp_seconds``
+  for every qemu guest, from the ``ctime`` of its ``meta`` config option. Each
+  config is read once per module and target, within 5 s per scrape; guests whose
+  config could not be read are tried again after the others.
+- ``storage-config`` collector (on by default): ``pve_storage_config_info`` from
+  ``/storage``, with the server, datastore, namespace and fingerprint of PBS
+  storages.
+- ``backup-tasks`` collector (off by default): the newest finished and the
+  running vzdump tasks of each node, from the node task list.
+- ``vmid`` and ``pool`` labels on ``pve_guest_info``.
+- ``pve_collector_success`` and ``pve_collector_duration_seconds`` per collector.
+  A collector that reads several objects (guests, jobs, nodes) and fails for
+  some logs one warning that names them, instead of a traceback per object.
+- What the exporter keeps per target (cached creation times and scheduled runs,
+  the series of the API and target metrics) is forgotten a day after the
+  target's last scrape.
+
+Changed
+~~~~~~~
+
+- A failing collector no longer fails the whole scrape (HTTP 500); its metrics
+  are left out and ``pve_collector_success`` is 0. Collector failures therefore
+  no longer count in ``pve_request_errors_total`` and
+  ``pve_scrape_target_errors_total``.
+- A target that does not answer the version call (connection error, timeout,
+  authentication failure) still fails the scrape with HTTP 500, so ``up`` is 0;
+  after a request fails to reach the target, the remaining requests of the
+  scrape fail at once (a TLS failure is not retried and does not end the
+  scrape). Password-authenticated targets also fail with HTTP 500 when the
+  login fails. A target that can not be reached is logged as a warning, without
+  traceback.
+- Each API request is sent once per scrape, also when several collectors use it,
+  and also when it fails: a slow endpoint costs its timeout once, not once per
+  collector. ``/cluster/resources`` was read three times per scrape.
+
+- **Breaking:** one set of metrics per kind of resource instead of one ``id``
+  covering nodes, guests and storages:
+
+  - ``pve_up`` is split into ``pve_node_online``, ``pve_cluster_quorate``,
+    ``pve_guest_running`` and ``pve_storage_available``.
+  - ``pve_cpu_usage_ratio``, ``pve_cpu_usage_limit``, ``pve_memory_*``,
+    ``pve_disk_{size,usage}_bytes`` and ``pve_uptime_seconds`` become
+    ``pve_node_{cpu_usage_ratio,cpus,memory_*,rootfs_*,uptime_seconds}``,
+    ``pve_guest_{cpu_usage_ratio,cpus,memory_*,disk_*,uptime_seconds}`` and
+    ``pve_storage_{size,usage}_bytes``; the traffic counters become
+    ``pve_guest_{network_receive,network_transmit,disk_read,disk_written}_bytes_total``.
+  - ``pve_ha_state`` is split into ``pve_node_ha_state`` and ``pve_guest_ha_state``;
+    ``pve_lock_state`` is ``pve_guest_lock_state``, which also knows the LXC locks
+    ``destroyed``, ``disk``, ``fstrim`` and ``mounted``.
+  - ``pve_cluster_info`` keeps only ``version``; the node count is
+    ``pve_cluster_nodes``, the quorum ``pve_cluster_quorate``.
+  - ``pve_qdevice_info`` has no ``state`` label (it is the value of ``pve_qdevice_up``).
+  - ``pve_onboot_status`` is ``pve_guest_onboot``, without the ``type`` label.
+
+- Unknown entry types of ``/cluster/status`` (e.g. a QDevice) are skipped instead
+  of failing the status collector.
+- ``pve_guest_onboot`` is 0 for guests without the ``onboot`` option (PVE's
+  default) instead of being left out.
+- ``pve_subscription_next_due_timestamp_seconds`` is midnight UTC of the due
+  date, instead of midnight in the timezone of the exporter.
+- ``PVE_VERIFY_SSL`` and the ``cluster`` and ``node`` url parameters also take
+  ``yes``/``no`` and ``on``/``off``.
+- **Breaking:** ``--collector.pve-api-metrics`` measures requests per target and
+  endpoint, the path with its ids as ``{node}``, ``{vmid}``, ``{storage}`` and
+  ``{id}`` (e.g. ``/nodes/{node}/qemu/{vmid}/config``), instead of per URL, which
+  made a series per guest. ``pve_scrape_api_duration_seconds`` is a summary
+  (count and sum) instead of a histogram; it and ``pve_scrape_api_errors_total``
+  have the labels ``target`` and ``endpoint`` instead of ``method`` and ``url``.
+  Requests answered from the cache of a scrape are not counted.
+- The API and target metrics are measured by the exporter itself instead of
+  wrappers patched into proxmoxer; ``wrapt`` is no longer a dependency.
+
+Removed
+~~~~~~~
+
+- **Breaking:** the deprecated gauges ``pve_network_transmit_bytes``,
+  ``pve_network_receive_bytes``, ``pve_disk_write_bytes`` and ``pve_disk_read_bytes``;
+  use the counters ``pve_guest_network_transmit_bytes_total``,
+  ``pve_guest_network_receive_bytes_total``, ``pve_guest_disk_written_bytes_total``
+  and ``pve_guest_disk_read_bytes_total``.
+- **Breaking:** the ``backup-info`` collector (``pve_not_backed_up_total``,
+  ``pve_not_backed_up_info``) and ``--collector.backup-info``. PVE counts guests
+  in disabled jobs as backed up; use ``pve_backup_job_guest_info`` and
+  ``pve_backup_job_enabled`` instead.
+
+Fixed
+~~~~~
+
+- The ``qdevice`` collector no longer takes every API error (e.g. a missing
+  permission) for a cluster without QDevice, which left out its metrics while
+  reporting success; such errors fail the collector. A cluster without QDevice
+  is recognized by PVE's empty answer.
+
 
 `3.12.0`_ - 2026-10-21
 ----------------------
@@ -829,7 +929,7 @@ Added
 .. _3.0.0b1: https://github.com/prometheus-pve/prometheus-pve-exporter/compare/v2.3.1...v3.0.0b1
 .. _2.3.1: https://github.com/prometheus-pve/prometheus-pve-exporter/compare/v2.3.0...v2.3.1
 .. _2.3.0: https://github.com/prometheus-pve/prometheus-pve-exporter/compare/v2.2.4...v2.3.0
-.. _2.2.3: https://github.com/prometheus-pve/prometheus-pve-exporter/compare/v2.2.3...v2.2.4
+.. _2.2.4: https://github.com/prometheus-pve/prometheus-pve-exporter/compare/v2.2.3...v2.2.4
 .. _2.2.3: https://github.com/prometheus-pve/prometheus-pve-exporter/compare/v2.2.2...v2.2.3
 .. _2.2.2: https://github.com/prometheus-pve/prometheus-pve-exporter/compare/v2.2.1...v2.2.2
 .. _2.2.1: https://github.com/prometheus-pve/prometheus-pve-exporter/compare/v2.2.0...v2.2.1

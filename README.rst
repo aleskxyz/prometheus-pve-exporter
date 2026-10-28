@@ -9,7 +9,7 @@ node for use by the Prometheus monitoring system.
 Installation
 ------------
 
-Requires Python 3.9 or better.
+Requires Python 3.11 or better.
 
 **Using pip:**
 
@@ -60,16 +60,19 @@ Usage
 ::
 
     usage: pve_exporter [-h] [--collector.status | --no-collector.status]
-                        [--collector.version | --no-collector.version]
+                        [--collector.resources | --no-collector.resources]
                         [--collector.node | --no-collector.node]
                         [--collector.cluster | --no-collector.cluster]
-                        [--collector.resources | --no-collector.resources]
-                        [--collector.resources.sparse-states | --no-collector.resources.sparse-states]
-                        [--collector.backup-info | --no-collector.backup-info]
+                        [--collector.version | --no-collector.version]
                         [--collector.qdevice | --no-collector.qdevice]
+                        [--collector.storage-config | --no-collector.storage-config]
+                        [--collector.backup-jobs | --no-collector.backup-jobs]
+                        [--collector.guest-created | --no-collector.guest-created]
+                        [--collector.backup-tasks | --no-collector.backup-tasks]
+                        [--collector.subscription | --no-collector.subscription]
                         [--collector.config | --no-collector.config]
                         [--collector.replication | --no-collector.replication]
-                        [--collector.subscription | --no-collector.subscription]
+                        [--collector.resources.sparse-states | --no-collector.resources.sparse-states]
                         [--collector.pve-api-metrics | --no-collector.pve-api-metrics]
                         [--collector.target-metrics | --no-collector.target-metrics]
                         [--config.file CONFIG_FILE]
@@ -95,39 +98,49 @@ Usage
 
       --collector.status, --no-collector.status
                             Exposes Node/VM/CT-Status
-      --collector.version, --no-collector.version
-                            Exposes PVE version info
+      --collector.resources, --no-collector.resources
+                            Exposes PVE resources info
       --collector.node, --no-collector.node
                             Exposes PVE node info
       --collector.cluster, --no-collector.cluster
                             Exposes PVE cluster info
-      --collector.resources, --no-collector.resources
-                            Exposes PVE resources info
-      --collector.resources.sparse-states, --no-collector.resources.sparse-states
-                            Only exposes pve_ha_state for HA managed guests and
-                            pve_lock_state for the lock a guest currently holds
-      --collector.backup-info, --no-collector.backup-info
-                            Exposes information about guests which are not covered
-                            by any backup job
+      --collector.version, --no-collector.version
+                            Exposes PVE version info
       --collector.qdevice, --no-collector.qdevice
                             Exposes PVE QDevice connection state
+      --collector.storage-config, --no-collector.storage-config
+                            Exposes the storage configuration
+      --collector.backup-jobs, --no-collector.backup-jobs
+                            Exposes backup jobs, the guests they select and their
+                            scheduled runs
+      --collector.guest-created, --no-collector.guest-created
+                            Exposes the creation time of qemu guests (reads each
+                            guest config once)
+      --collector.backup-tasks, --no-collector.backup-tasks
+                            Exposes the newest finished and the running vzdump
+                            tasks of each node
+      --collector.resources.sparse-states, --no-collector.resources.sparse-states
+                            Only exposes pve_guest_ha_state for HA managed guests
+                            and pve_guest_lock_state for the lock a guest
+                            currently holds
 
     node collectors:
       node collectors are run if the url parameter node=1 is set and skipped if
       the url parameter node=0 is set on a scrape url.
 
+      --collector.subscription, --no-collector.subscription
+                            Exposes PVE subscription info
       --collector.config, --no-collector.config
                             Exposes PVE onboot status
       --collector.replication, --no-collector.replication
                             Exposes PVE replication info
-      --collector.subscription, --no-collector.subscription
-                            Exposes PVE subscription info
 
     scrape collectors:
       metrics concerning the operation of the Prometheus PVE exporter itself.
 
       --collector.pve-api-metrics, --no-collector.pve-api-metrics
-                            Exposes duration of PVE API calls
+                            Exposes duration and errors of PVE API requests per
+                            endpoint
       --collector.target-metrics, --no-collector.target-metrics
                             Exposes duration of scrapes by target
 
@@ -151,7 +164,7 @@ It is therefore recommended to disable this collector using the
 `--no-collector.config` flag on big deployments.
 
 Scrape collectors return metrics concerning the operation of the Prometheus PVE
-exporter itself. Those metrics are available from the `/metric`.
+exporter itself. Those metrics are available from the `/metrics`.
 
 See the wiki_  for more examples and docs.
 
@@ -162,116 +175,121 @@ Here's an example of the metrics exported.
 
 ::
 
-    # HELP pve_up Node/VM/CT-Status is online/running
-    # TYPE pve_up gauge
-    pve_up{id="node/proxmox"} 1.0
-    pve_up{id="qemu/100"} 1.0
-    pve_up{id="storage/proxmox/local"} 1.0
-    pve_up{id="storage/proxmox/local-lvm"} 1.0
-    pve_up{id="storage/proxmox/vms"} 1.0
-    # HELP pve_disk_size_bytes Storage size in bytes (for type 'storage'), root image size for VMs (for types 'qemu' and 'lxc').
-    # TYPE pve_disk_size_bytes gauge
-    pve_disk_size_bytes{id="qemu/100"} 6.8719476736e+010
-    pve_disk_size_bytes{id="node/proxmox"} 3.1044079616e+010
-    pve_disk_size_bytes{id="storage/proxmox/local"} 3.1044079616e+010
-    pve_disk_size_bytes{id="storage/proxmox/local-lvm"} 6.9243764736e+010
-    pve_disk_size_bytes{id="storage/proxmox/vms"} 1.934882766848e+012
-    # HELP pve_disk_usage_bytes Used disk space in bytes (for type 'storage'), used root image space for VMs (for types 'qemu' and 'lxc').
-    # TYPE pve_disk_usage_bytes gauge
-    pve_disk_usage_bytes{id="qemu/100"} 0.0
-    pve_disk_usage_bytes{id="node/proxmox"} 1.7571426304e+010
-    pve_disk_usage_bytes{id="storage/proxmox/local"} 1.7571426304e+010
-    pve_disk_usage_bytes{id="storage/proxmox/local-lvm"} 6.619703908e+09
-    pve_disk_usage_bytes{id="storage/proxmox/vms"} 8.32870981632e+011
-    # HELP pve_memory_size_bytes Number of available memory in bytes (for types 'node', 'qemu' and 'lxc').
-    # TYPE pve_memory_size_bytes gauge
-    pve_memory_size_bytes{id="qemu/100"} 1.7179869184e+010
-    pve_memory_size_bytes{id="node/proxmox"} 6.739961856e+010
-    # HELP pve_memory_usage_bytes Used memory in bytes (for types 'node', 'qemu' and 'lxc').
-    # TYPE pve_memory_usage_bytes gauge
-    pve_memory_usage_bytes{id="qemu/100"} 1.6573280275e+010
-    pve_memory_usage_bytes{id="node/proxmox"} 5.3907812352e+010
-    # HELP pve_network_transmit_bytes The amount of traffic in bytes that was sent from the guest over the network since it was started. (for types 'qemu' and 'lxc') DEPRECATED: use pve_network_transmit_bytes_total instead.
-    # TYPE pve_network_transmit_bytes gauge
-    pve_network_transmit_bytes{id="qemu/100"} 7.75070828e+09
-    # HELP pve_network_transmit_bytes_total The amount of traffic in bytes that was sent from the guest over the network since it was started. (for types 'qemu' and 'lxc')
-    # TYPE pve_network_transmit_bytes_total counter
-    pve_network_transmit_bytes_total{id="qemu/100"} 7.75070828e+09
-    # HELP pve_network_receive_bytes The amount of traffic in bytes that was sent to the guest over the network since it was started. (for types 'qemu' and 'lxc') DEPRECATED: use pve_network_receive_bytes_total instead.
-    # TYPE pve_network_receive_bytes gauge
-    pve_network_receive_bytes{id="qemu/100"} 1.529756162e+09
-    # HELP pve_network_receive_bytes_total The amount of traffic in bytes that was sent to the guest over the network since it was started. (for types 'qemu' and 'lxc')
-    # TYPE pve_network_receive_bytes_total counter
-    pve_network_receive_bytes_total{id="qemu/100"} 1.529756162e+09
-    # HELP pve_disk_write_bytes The amount of bytes the guest wrote to its block devices since the guest was started. This info is not available for all storage types. (for types 'qemu' and 'lxc') DEPRECATED: use pve_disk_written_bytes_total instead.
-    # TYPE pve_disk_write_bytes gauge
-    pve_disk_write_bytes{id="qemu/100"} 1.50048127488e+011
-    # HELP pve_disk_written_bytes_total The amount of bytes the guest wrote to its block devices since the guest was started. This info is not available for all storage types. (for types 'qemu' and 'lxc')
-    # TYPE pve_disk_written_bytes_total counter
-    pve_disk_written_bytes_total{id="qemu/100"} 1.50048127488e+011
-    # HELP pve_disk_read_bytes The amount of bytes the guest read from its block devices since the guest was started. This info is not available for all storage types. (for types 'qemu' and 'lxc') DEPRECATED: use pve_disk_read_bytes_total instead.
-    # TYPE pve_disk_read_bytes gauge
-    pve_disk_read_bytes{id="qemu/100"} 7.473739264e+09
-    # HELP pve_disk_read_bytes_total The amount of bytes the guest read from its block devices since the guest was started. This info is not available for all storage types. (for types 'qemu' and 'lxc')
-    # TYPE pve_disk_read_bytes_total counter
-    pve_disk_read_bytes_total{id="qemu/100"} 7.473739264e+09
-    # HELP pve_cpu_usage_ratio CPU utilization (for types 'node', 'qemu' and 'lxc').
-    # TYPE pve_cpu_usage_ratio gauge
-    pve_cpu_usage_ratio{id="qemu/100"} 0.105009724408557
-    pve_cpu_usage_ratio{id="node/proxmox"} 0.984243806697115
-    # HELP pve_cpu_usage_limit Number of available CPUs (for types 'node', 'qemu' and 'lxc').
-    # TYPE pve_cpu_usage_limit gauge
-    pve_cpu_usage_limit{id="qemu/100"} 1.0
-    pve_cpu_usage_limit{id="node/proxmox"} 4.0
-    # HELP pve_uptime_seconds Uptime of node or virtual guest in seconds (for types 'node', 'qemu' and 'lxc').
-    # TYPE pve_uptime_seconds gauge
-    pve_uptime_seconds{id="qemu/100"} 315039.0
-    pve_uptime_seconds{id="node/proxmox"} 315069.0
-    # HELP pve_storage_shared Whether or not the storage is shared among cluster nodes
+    # HELP pve_node_online Whether the node is online (/cluster/status).
+    # TYPE pve_node_online gauge
+    pve_node_online{id="node/proxmox"} 1.0
+    # HELP pve_cluster_quorate Whether the cluster is quorate (/cluster/status).
+    # TYPE pve_cluster_quorate gauge
+    pve_cluster_quorate{id="cluster/pvc"} 1.0
+    # HELP pve_guest_running Whether the guest is running (status of /cluster/resources).
+    # TYPE pve_guest_running gauge
+    pve_guest_running{id="qemu/100"} 1.0
+    # HELP pve_storage_available Whether the storage is available on the node (status of /cluster/resources).
+    # TYPE pve_storage_available gauge
+    pve_storage_available{id="storage/proxmox/local"} 1.0
+    # HELP pve_node_cpu_usage_ratio CPU utilization of the node.
+    # TYPE pve_node_cpu_usage_ratio gauge
+    pve_node_cpu_usage_ratio{id="node/proxmox"} 0.034
+    # HELP pve_node_cpus Number of CPUs of the node.
+    # TYPE pve_node_cpus gauge
+    pve_node_cpus{id="node/proxmox"} 32.0
+    # HELP pve_node_memory_usage_bytes Used memory of the node.
+    # TYPE pve_node_memory_usage_bytes gauge
+    pve_node_memory_usage_bytes{id="node/proxmox"} 5.39e+10
+    # HELP pve_node_memory_size_bytes Memory of the node.
+    # TYPE pve_node_memory_size_bytes gauge
+    pve_node_memory_size_bytes{id="node/proxmox"} 6.74e+10
+    # HELP pve_node_rootfs_usage_bytes Used space of the root file system of the node.
+    # TYPE pve_node_rootfs_usage_bytes gauge
+    pve_node_rootfs_usage_bytes{id="node/proxmox"} 2.1e+10
+    # HELP pve_node_rootfs_size_bytes Size of the root file system of the node.
+    # TYPE pve_node_rootfs_size_bytes gauge
+    pve_node_rootfs_size_bytes{id="node/proxmox"} 1.01e+11
+    # HELP pve_node_uptime_seconds Uptime of the node.
+    # TYPE pve_node_uptime_seconds gauge
+    pve_node_uptime_seconds{id="node/proxmox"} 987654.0
+    # HELP pve_guest_cpu_usage_ratio CPU utilization of the guest.
+    # TYPE pve_guest_cpu_usage_ratio gauge
+    pve_guest_cpu_usage_ratio{id="qemu/100"} 0.012
+    # HELP pve_guest_cpus Number of virtual CPUs of the guest.
+    # TYPE pve_guest_cpus gauge
+    pve_guest_cpus{id="qemu/100"} 4.0
+    # HELP pve_guest_memory_usage_bytes Used memory of the guest.
+    # TYPE pve_guest_memory_usage_bytes gauge
+    pve_guest_memory_usage_bytes{id="qemu/100"} 1.66e+10
+    # HELP pve_guest_memory_size_bytes Memory of the guest.
+    # TYPE pve_guest_memory_size_bytes gauge
+    pve_guest_memory_size_bytes{id="qemu/100"} 1.72e+10
+    # HELP pve_guest_disk_usage_bytes Used space of the root file system of a container; not exposed for VMs, as PVE can not see inside them and reports 0.
+    # TYPE pve_guest_disk_usage_bytes gauge
+    # HELP pve_guest_disk_size_bytes Size of the root disk of the guest.
+    # TYPE pve_guest_disk_size_bytes gauge
+    pve_guest_disk_size_bytes{id="qemu/100"} 1.07e+11
+    # HELP pve_guest_uptime_seconds Uptime of the guest.
+    # TYPE pve_guest_uptime_seconds gauge
+    pve_guest_uptime_seconds{id="qemu/100"} 3600.0
+    # HELP pve_guest_network_receive_bytes_total Bytes the guest received over the network since it was started.
+    # TYPE pve_guest_network_receive_bytes_total counter
+    pve_guest_network_receive_bytes_total{id="qemu/100"} 1.53e+09
+    # HELP pve_guest_network_transmit_bytes_total Bytes the guest sent over the network since it was started.
+    # TYPE pve_guest_network_transmit_bytes_total counter
+    pve_guest_network_transmit_bytes_total{id="qemu/100"} 7.75e+09
+    # HELP pve_guest_disk_read_bytes_total Bytes the guest read from its block devices since it was started (not for all storage types).
+    # TYPE pve_guest_disk_read_bytes_total counter
+    pve_guest_disk_read_bytes_total{id="qemu/100"} 7.47e+09
+    # HELP pve_guest_disk_written_bytes_total Bytes the guest wrote to its block devices since it was started (not for all storage types).
+    # TYPE pve_guest_disk_written_bytes_total counter
+    pve_guest_disk_written_bytes_total{id="qemu/100"} 1.5e+11
+    # HELP pve_storage_usage_bytes Used space of the storage on the node.
+    # TYPE pve_storage_usage_bytes gauge
+    pve_storage_usage_bytes{id="storage/proxmox/local"} 2.1e+10
+    # HELP pve_storage_size_bytes Size of the storage on the node.
+    # TYPE pve_storage_size_bytes gauge
+    pve_storage_size_bytes{id="storage/proxmox/local"} 1.01e+11
+    # HELP pve_storage_shared Whether the storage is shared among cluster nodes.
     # TYPE pve_storage_shared gauge
     pve_storage_shared{id="storage/proxmox/local"} 0.0
-    pve_storage_shared{id="storage/proxmox/local-lvm"} 0.0
-    pve_storage_shared{id="storage/proxmox/vms"} 0.0
-    # HELP pve_ha_state HA service status (for HA managed VMs).
-    # TYPE pve_ha_state gauge
-    pve_ha_state{id="qemu/100",state="stopped"} 0.0
-    pve_ha_state{id="qemu/100",state="request_stop"} 0.0
-    pve_ha_state{id="qemu/100",state="request_start"} 0.0
-    pve_ha_state{id="qemu/100",state="request_start_balance"} 0.0
-    pve_ha_state{id="qemu/100",state="started"} 1.0
-    pve_ha_state{id="qemu/100",state="fence"} 0.0
-    pve_ha_state{id="qemu/100",state="recovery"} 0.0
-    pve_ha_state{id="qemu/100",state="migrate"} 0.0
-    pve_ha_state{id="qemu/100",state="relocate"} 0.0
-    pve_ha_state{id="qemu/100",state="freeze"} 0.0
-    pve_ha_state{id="qemu/100",state="error"} 0.0
-    pve_ha_state{id="node/proxmox",state="online"} 1.0
-    pve_ha_state{id="node/proxmox",state="maintenance"} 0.0
-    pve_ha_state{id="node/proxmox",state="unknown"} 0.0
-    pve_ha_state{id="node/proxmox",state="fence"} 0.0
-    pve_ha_state{id="node/proxmox",state="gone"} 0.0
-    # HELP pve_lock_state The guest's current config lock (for types 'qemu' and 'lxc')
-    # TYPE pve_lock_state gauge
-    pve_lock_state{id="qemu/100",state="backup"} 0.0
-    pve_lock_state{id="qemu/100",state="clone"} 0.0
-    pve_lock_state{id="qemu/100",state="create"} 0.0
-    pve_lock_state{id="qemu/100",state="migrate"} 0.0
-    pve_lock_state{id="qemu/100",state="rollback"} 0.0
-    pve_lock_state{id="qemu/100",state="snapshot"} 0.0
-    pve_lock_state{id="qemu/100",state="snapshot-delete"} 0.0
-    pve_lock_state{id="qemu/100",state="suspended"} 0.0
-    pve_lock_state{id="qemu/100",state="suspending"} 0.0
+    # HELP pve_node_ha_state HA state of the node.
+    # TYPE pve_node_ha_state gauge
+    pve_node_ha_state{id="node/proxmox",state="online"} 1.0
+    pve_node_ha_state{id="node/proxmox",state="maintenance"} 0.0
+    pve_node_ha_state{id="node/proxmox",state="unknown"} 0.0
+    pve_node_ha_state{id="node/proxmox",state="fence"} 0.0
+    pve_node_ha_state{id="node/proxmox",state="gone"} 0.0
+    # HELP pve_guest_ha_state HA state of the guest (for HA managed guests).
+    # TYPE pve_guest_ha_state gauge
+    pve_guest_ha_state{id="qemu/100",state="stopped"} 0.0
+    pve_guest_ha_state{id="qemu/100",state="request_stop"} 0.0
+    pve_guest_ha_state{id="qemu/100",state="request_start"} 0.0
+    pve_guest_ha_state{id="qemu/100",state="request_start_balance"} 0.0
+    pve_guest_ha_state{id="qemu/100",state="started"} 1.0
+    pve_guest_ha_state{id="qemu/100",state="fence"} 0.0
+    pve_guest_ha_state{id="qemu/100",state="recovery"} 0.0
+    pve_guest_ha_state{id="qemu/100",state="migrate"} 0.0
+    pve_guest_ha_state{id="qemu/100",state="relocate"} 0.0
+    pve_guest_ha_state{id="qemu/100",state="freeze"} 0.0
+    pve_guest_ha_state{id="qemu/100",state="error"} 0.0
+    # HELP pve_guest_lock_state The guest's current config lock
+    # TYPE pve_guest_lock_state gauge
+    pve_guest_lock_state{id="qemu/100",state="backup"} 1.0
     # HELP pve_guest_info VM/CT info
     # TYPE pve_guest_info gauge
-    pve_guest_info{id="qemu/100",name="samplevm1",node="proxmox",type="qemu",tags="tag1;tag2"} 1.0
+    pve_guest_info{id="qemu/100",name="samplevm1",node="proxmox",pool="prod",tags="tag1;tag2",template="0",type="qemu",vmid="100"} 1.0
     # HELP pve_storage_info Storage info
     # TYPE pve_storage_info gauge
-    pve_storage_info{content="iso,vztmpl,rootdir",id="storage/proxmox/local",node="proxmox",plugintype="dir",storage="local"} 1.0
-    pve_storage_info{content="backup",id="storage/proxmox/local-lvm",node="proxmox",plugintype="lvm",storage="local-lvm"} 1.0
-    pve_storage_info{content="images",id="storage/proxmox/vms",node="proxmox",plugintype="rbd",storage="vms"} 1.0
+    pve_storage_info{content="backup,iso,vztmpl",id="storage/proxmox/local",node="proxmox",plugintype="dir",storage="local"} 1.0
     # HELP pve_node_info Node info
     # TYPE pve_node_info gauge
-    pve_node_info{id="node/proxmox",level="",name="proxmox",nodeid="0"} 1.0
+    pve_node_info{id="node/proxmox",level="c",name="proxmox",nodeid="1"} 1.0
+    # HELP pve_cluster_info Cluster info (version of the cluster configuration), always 1.
+    # TYPE pve_cluster_info gauge
+    pve_cluster_info{id="cluster/pvc",version="2"} 1.0
+    # HELP pve_cluster_nodes Number of nodes of the cluster.
+    # TYPE pve_cluster_nodes gauge
+    pve_cluster_nodes{id="cluster/pvc"} 1.0
+    # HELP pve_version_info Proxmox VE version info
+    # TYPE pve_version_info gauge
+    pve_version_info{release="9.2",repoid="6fe299a0",version="9.2.13"} 1.0
     # HELP pve_subscription_info Proxmox VE subscription info (1 if present)
     # TYPE pve_subscription_info gauge
     pve_subscription_info{id="node/proxmox",level="c"} 1.0
@@ -283,28 +301,21 @@ Here's an example of the metrics exported.
     pve_subscription_status{id="node/proxmox",status="invalid"} 0.0
     pve_subscription_status{id="node/proxmox",status="expired"} 0.0
     pve_subscription_status{id="node/proxmox",status="suspended"} 0.0
-    # HELP pve_subscription_next_due_timestamp_seconds Subscription next due date as Unix timestamp
+    # HELP pve_subscription_next_due_timestamp_seconds Subscription next due date as Unix timestamp (midnight UTC)
     # TYPE pve_subscription_next_due_timestamp_seconds gauge
-    pve_subscription_next_due_timestamp_seconds{id="node/proxmox"} 1.713382503e+09
+    pve_subscription_next_due_timestamp_seconds{id="node/proxmox"} 1.713312e+09
     # HELP pve_qdevice_up Proxmox VE QDevice is connected (1) or not (0)
     # TYPE pve_qdevice_up gauge
     pve_qdevice_up{id="cluster/pvc"} 1.0
     # HELP pve_qdevice_info Proxmox VE QDevice info (1 if configured)
     # TYPE pve_qdevice_info gauge
-    pve_qdevice_info{id="cluster/pvc",model="Net",algorithm="Fifty-Fifty split",qnetd_host="10.0.0.1:5403",tie_breaker="Node with lowest node ID",state="Connected"} 1.0
-    # HELP pve_onboot_status Proxmox vm config onboot value
-    # TYPE pve_onboot_status gauge
-    pve_onboot_status{id="qemu/201",node="proxmox",type="qemu"} 1.0
-    # HELP pve_version_info Proxmox VE version info
-    # TYPE pve_version_info gauge
-    pve_version_info{release="7.1",repoid="6fe299a0",version="7.1-5"} 1.0
-    # HELP pve_not_backed_up_total Total number of guests not covered by any backup job.
-    # TYPE pve_not_backed_up_total gauge
-    pve_not_backed_up_total{id="cluster/pvc"} 2.0
-    # HELP pve_not_backed_up_info Present if guest is not covered by any backup job.
-    # TYPE pve_not_backed_up_info gauge
-    pve_not_backed_up_info{id="qemu/100"} 1.0
-    pve_not_backed_up_info{id="qemu/101"} 1.0
+    pve_qdevice_info{id="cluster/pvc",model="Net",algorithm="Fifty-Fifty split",qnetd_host="10.0.0.1:5403",tie_breaker="Node with lowest node ID"} 1.0
+    # HELP pve_guest_onboot Whether the guest starts at boot (onboot config option, 0 if not set).
+    # TYPE pve_guest_onboot gauge
+    pve_guest_onboot{id="qemu/201",node="proxmox"} 1.0
+    # HELP pve_collector_success Whether a collector succeeded in this scrape.
+    # TYPE pve_collector_success gauge
+    pve_collector_success{collector="backup_jobs"} 1.0
     # HELP pve_replication_duration_seconds Proxmox vm replication duration
     # TYPE pve_replication_duration_seconds gauge
     pve_replication_duration_seconds{id="1-0"} 7.73584
@@ -367,8 +378,9 @@ Required for `token authentication`_:
 
 Optional:
 
-* ``PVE_VERIFY_SSL``: Either ``true`` or ``false``, whether or not to verify PVE tls
-  certificate. Defaults to ``true``.
+* ``PVE_VERIFY_SSL``: Either ``true`` or ``false`` (also ``1``/``0``, ``yes``/``no``,
+  ``on``/``off``), whether or not to verify PVE tls certificate. Defaults to ``true``,
+  also when empty.
 * ``PVE_MODULE``: Name of the configuration module. Defaults to ``default``.
 * ``PVE_ALLOW_LIST``: Comma separated list of allowed targets, e.g.
   ``pve1.example.com,pve2.example.com``. See below.
@@ -418,6 +430,66 @@ For security reasons it is essential to add a user with read-only access
 
 Refer to the  `Proxmox Documentation`_ for the several ways of creating a user.
 Once created, assign the user the `/` path permission.
+
+Collector failures
+------------------
+
+A collector that fails (e.g. for a missing privilege) does not fail the
+scrape: its metrics are left out and ``pve_collector_success{collector}`` is 0.
+A collector that reads several objects (backup jobs, guest configs, node task
+lists) and fails for some exports the others, also reports 0 and logs one
+warning naming them. A target that does not answer the version call fails the
+scrape (HTTP 500, so ``up`` is 0); after a request fails to reach the target,
+the rest of the scrape fails at once instead of waiting for each timeout. Each
+API request is sent once per scrape, also when it fails, so a slow endpoint
+costs its timeout once. What the exporter keeps per target is forgotten a day
+after the target's last scrape.
+
+Backup metrics
+--------------
+
+``backup-jobs`` (on by default) reads ``/cluster/backup``:
+
+- ``pve_backup_job_info{job_id,storage,schedule,mode,node,all,pool,repeat_missed}``
+  (the job's own keys), ``pve_backup_job_enabled{job_id}`` and
+  ``pve_backup_job_next_run_timestamp_seconds{job_id}`` (``next-run``).
+- ``pve_backup_job_{previous,last}_scheduled_timestamp_seconds{job_id}``: the two
+  newest runs not in the future that ``/cluster/jobs/schedule-analyze`` returns
+  for an enabled job's schedule, so PVE's calendar logic applies. Compare
+  backups against these instead of an assumed interval; they are exact for
+  irregular schedules such as ``mon..fri 21:00``.
+- ``pve_backup_job_guest_info{job_id,storage,id,vmid}``: the guests a job selects,
+  as PVE resolves ``all``, ``pool``, ``vmid``, ``exclude`` and ``node``
+  (``included_volumes``). ``pve_backup_job_guest_excluded_volumes{job_id,id}``
+  counts the volumes it leaves out (only guests with excluded volumes),
+  ``pve_backup_job_unknown_guest_info{job_id,vmid}`` lists VMIDs a job names that
+  are no guests. A job whose guests or schedule can not be read is left out as
+  a whole.
+
+``guest-created`` (on by default):
+``pve_guest_created_timestamp_seconds{id}``, the creation time of every qemu guest
+(``ctime`` of its ``meta`` config option; LXC has none). Each guest's config is
+read once and cached (read again when the VMID gets another name); guests of
+offline nodes are skipped. A scrape starts no config read after 5 seconds; the
+rest follows in the next scrapes, and the collector reports 0 until all are
+read.
+
+``storage-config`` (on by default) reads ``/storage``:
+``pve_storage_config_info{storage,type,server,port,datastore,datastore_namespace,fingerprint,disabled}``.
+For a Proxmox Backup Server storage, ``fingerprint``, ``datastore`` and
+``datastore_namespace`` tell where its backups are.
+
+``backup-tasks`` (off by default) reads the vzdump tasks of every online node from
+the node task list (``/nodes/{node}/tasks?typefilter=vzdump``), one series per node:
+``pve_backup_task_last_{start,end}_timestamp_seconds`` and ``pve_backup_task_last_success``
+of the newest finished task, ``pve_backup_tasks_running`` (tasks waiting for the
+backup lock count as running) and, while one runs,
+``pve_backup_task_running_start_timestamp_seconds``. The task list tells neither
+the storage nor the guests of a task, and task logs are not read: whether a
+guest was backed up is for the backup storage to tell (e.g. the snapshots a
+Proxmox Backup Server reports).
+
+A token with the ``PVEAuditor`` role on ``/`` has all privileges these need.
 
 Prometheus Configuration
 ------------------------
@@ -471,7 +543,7 @@ example, alerting only when VM with `critical` tag is down:
 
 .. code:: promql
 
-   (pve_guest_info{tags=~".*critical.*"} * on(id) group_left(name) pve_up{}) == 0
+   (pve_guest_info{tags=~".*critical.*"} * on(id) group_left(name) pve_guest_running) == 0
 
 **Note on scraping large clusters:**
 

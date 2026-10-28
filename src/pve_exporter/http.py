@@ -11,7 +11,9 @@ from prometheus_client import CONTENT_TYPE_LATEST, Summary, Counter, generate_la
 from werkzeug.routing import Map, Rule
 from werkzeug.wrappers import Request, Response
 from werkzeug.exceptions import InternalServerError
-from pve_exporter.collector import collect_pve
+from pve_exporter import collector
+from pve_exporter.collector.scrape_api import TargetUnreachable
+from pve_exporter.util import parse_bool
 
 
 class PveExporterApplication:
@@ -67,17 +69,18 @@ class PveExporterApplication:
             response = Response(f"Target '{target}' not allowed for module '{module}'")
             response.status_code = 403
         elif module in self._config:
-            start = time.time()
-            output = collect_pve(
+            start = time.monotonic()
+            output = collector.collect_pve(
                 self._config[module],
                 target,
-                cluster.lower() not in ['false', '0', ''],
-                node.lower() not in ['false', '0', ''],
-                self._collectors
+                parse_bool(cluster),
+                parse_bool(node),
+                self._collectors,
+                module=module,
             )
             response = Response(output)
             response.headers['content-type'] = CONTENT_TYPE_LATEST
-            self._duration.labels(module).observe(time.time() - start)
+            self._duration.labels(module).observe(time.monotonic() - start)
         else:
             response = Response(f"Module '{module}' not found in config")
             response.status_code = 400
@@ -134,8 +137,15 @@ class PveExporterApplication:
         try:
             return view_registry[endpoint](**params)
         except Exception as error:  # pylint: disable=broad-except
-            self._log.exception("Exception thrown while rendering view")
-            self._errors.labels(args.get('module', 'default')).inc()
+            if isinstance(error, TargetUnreachable):
+                # a target that is down is no exporter fault: no traceback
+                self._log.warning("Scrape of %r failed: %s", args.get('target'), error)
+            else:
+                self._log.exception("Exception thrown while rendering view")
+            # Only modules of the config, so that requests do not make labels.
+            module = args.get('module', 'default')
+            if module in self._config:
+                self._errors.labels(module).inc()
             raise InternalServerError from error
 
     @Request.application
