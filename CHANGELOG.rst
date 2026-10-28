@@ -9,6 +9,10 @@ The format is based on `Keep a Changelog`_ and this project adheres to
 `Unreleased`_
 -------------
 
+
+`4.0.0`_ - 2026-10-28
+---------------------
+
 Added
 ~~~~~
 
@@ -889,7 +893,8 @@ Added
 
 .. _Keep a Changelog: http://keepachangelog.com/en/1.0.0/
 .. _Semantic Versioning: http://semver.org/spec/v2.0.0.html
-.. _Unreleased: https://github.com/aleskxyz/prometheus-pve-exporter/compare/v3.12.0...HEAD
+.. _Unreleased: https://github.com/aleskxyz/prometheus-pve-exporter/compare/v4.0.0...HEAD
+.. _4.0.0: https://github.com/aleskxyz/prometheus-pve-exporter/compare/v3.12.0...v4.0.0
 .. _3.12.0: https://github.com/aleskxyz/prometheus-pve-exporter/compare/v3.11.0...v3.12.0
 .. _3.11.0: https://github.com/aleskxyz/prometheus-pve-exporter/compare/v3.10.1...v3.11.0
 .. _3.10.1: https://github.com/prometheus-pve/prometheus-pve-exporter/compare/v3.10.0...v3.10.1
