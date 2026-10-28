@@ -3,6 +3,7 @@ Prometheus collector for the creation time of Proxmox VE guests.
 """
 # pylint: disable=too-few-public-methods
 
+import itertools
 import re
 import threading
 import time
@@ -44,7 +45,8 @@ class CreatedCache:
     Creation time of qemu guests per scope (module and target), read once per
     guest. A guest is the VMID together with its name, so a reused VMID is
     read again; a guest whose config could not be read is tried again in the
-    next scrape, after the guests not tried yet. Scopes are separate, as their
+    next scrapes, after the guests not tried yet and those that failed less
+    recently, so that every guest gets its turn. Scopes are separate, as their
     credentials may see different guests; a scope not used for idle_seconds
     is forgotten.
     """
@@ -55,8 +57,9 @@ class CreatedCache:
         self._created = {}
         # {scope: set of the VMIDs of the newest get()}
         self._present = {}
-        # {scope: set of the VMIDs whose config could not be read}
+        # {scope: {vmid: when its config could not be read, in self._attempts}}
         self._failed = {}
+        self._attempts = itertools.count()
         self._expiry = IdleExpiry(idle_seconds)
 
     def get(self, pve, scope: typing.Hashable, guests: dict[int, Guest]) -> CreatedTimes:
@@ -65,8 +68,9 @@ class CreatedCache:
         failures = ReadFailures('configs of qemu guests')
         pending = self._read(pve, scope, guests, missing, failures)
         with self._lock:
-            self._failed[scope].update(
-                vmid for vmid in failures.items if vmid in self._present[scope])
+            for vmid in failures.items:
+                if vmid in self._present[scope]:
+                    self._failed[scope][vmid] = next(self._attempts)
             created = {vmid: ctime for vmid, (_, ctime) in self._created[scope].items()
                        if ctime is not None and vmid in guests}
         return CreatedTimes(created=created, failed=failures, pending=pending)
@@ -74,9 +78,10 @@ class CreatedCache:
     def _missing(self, scope: typing.Hashable, guests: dict[int, Guest]) -> list[int]:
         """
         Forget idle scopes and the guests that went or changed; return the
-        readable guests without creation time, those not tried yet first, so
-        that a guest whose read keeps failing (e.g. its node does not answer)
-        does not use up the budget of the others.
+        readable guests without creation time: those not tried yet first, then
+        those that failed least recently, so that a guest whose read keeps
+        failing (e.g. its node does not answer) does not use up the budget of
+        the others.
         """
         with self._lock:
             for idle in self._expiry.use(scope, time.monotonic()):
@@ -87,11 +92,12 @@ class CreatedCache:
             for vmid in [vmid for vmid, (name, _) in known.items() if vmid not in guests
                          or (guests[vmid].readable and guests[vmid].name != name)]:
                 del known[vmid]
-            failed_before = self._failed.setdefault(scope, set())
-            failed_before &= set(guests)
+            failed = self._failed.setdefault(scope, {})
+            for vmid in [vmid for vmid in failed if vmid not in guests]:
+                del failed[vmid]
             return sorted(
                 (vmid for vmid in guests if vmid not in known and guests[vmid].readable),
-                key=lambda vmid: (vmid in failed_before, vmid))
+                key=lambda vmid: (vmid in failed, failed.get(vmid, 0), vmid))
 
     def _read(self, pve, scope: typing.Hashable, guests: dict[int, Guest],
               missing: list[int], failures: ReadFailures) -> int:
@@ -111,7 +117,7 @@ class CreatedCache:
                 if vmid in self._present[scope]:
                     self._created[scope][vmid] = (
                         guests[vmid].name, int(match.group(1)) if match else None)
-                self._failed[scope].discard(vmid)
+                self._failed[scope].pop(vmid, None)
         return 0
 
 

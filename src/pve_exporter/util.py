@@ -34,9 +34,13 @@ class IdleExpiry:  # pylint: disable=too-few-public-methods
         self._used = {}
 
     def use(self, key: typing.Hashable, now: float) -> list:
-        """Record that key is used at now; return the keys idle for too long."""
-        self._used[key] = now
+        """
+        Record that key is used at now; return the keys idle for too long,
+        key among them when it comes back after such a time, so that its
+        state is not older than idle_seconds either.
+        """
         expired = [k for k, used in self._used.items() if now - used > self._idle_seconds]
         for k in expired:
             del self._used[k]
+        self._used[key] = now
         return expired

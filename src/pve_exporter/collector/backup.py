@@ -118,6 +118,9 @@ class ScheduleCache:
         """Forget the schedules of scope that are not in schedules, and idle scopes."""
         with self._lock:
             idle = set(self._expiry.use(scope, time.monotonic()))
+            # runs are valid until the next run, however long scope was idle,
+            # and those of this scrape were just read
+            idle.discard(scope)
             for key in [key for key in self._runs
                         if key[0] in idle or (key[0] == scope and key[1] not in schedules)]:
                 del self._runs[key]
@@ -235,9 +238,9 @@ class BackupJobsCollector:
         return out
 
 
-# vzdump tasks listed per node, newest first: enough to hold the running ones
-# and the newest finished one.
-TASK_LIST_LIMIT = 50
+# Running vzdump tasks listed per node; a node with more is reported as
+# incomplete.
+ACTIVE_TASK_LIMIT = 1000
 
 
 def task_succeeded(status: str) -> bool:
@@ -253,9 +256,10 @@ def task_finished(task: dict) -> bool:
 class BackupTasksCollector:
     """
     Collects the vzdump tasks of every online node, as the node task list
-    (/nodes/{node}/tasks?typefilter=vzdump) reports them: the newest finished
-    task and the running ones. The task list tells neither the storage nor
-    the guests of a task, and task logs are not read. E.g.:
+    (/nodes/{node}/tasks?typefilter=vzdump) reports them: the running tasks
+    (source=active) and the newest finished one (source=archive, which PVE
+    lists newest first). The task list tells neither the storage nor the
+    guests of a task, and task logs are not read. E.g.:
 
     pve_backup_task_last_start_timestamp_seconds{node="pve1"} 1.7e9
     pve_backup_task_last_success{node="pve1"} 1.0
@@ -287,24 +291,36 @@ class BackupTasksCollector:
             'Start of the oldest running vzdump task of the node.', labels=['node'])
 
         failures = ReadFailures('vzdump tasks of nodes')
+        too_many = []
         for entry in self._pve.cluster.status.get():
             if entry['type'] != 'node' or not entry.get('online'):
                 continue
             node = entry['name']
-            tasks = failures.read(node, lambda node=node: self._pve.nodes(node).tasks.get(
-                typefilter='vzdump', source='all', limit=TASK_LIST_LIMIT))
+            tasks = failures.read(node, lambda node=node: self._tasks(node))
             if tasks is None:
                 continue
-            finished = [task for task in tasks if task_finished(task)]
-            active = [int(task['starttime']) for task in tasks if not task_finished(task)]
-            if finished:
-                newest = max(finished, key=lambda task: int(task['starttime']))
+            active, newest = tasks
+            if len(active) >= ACTIVE_TASK_LIMIT:
+                too_many.append(node)
+            if newest is not None:
                 last_start.add_metric([node], int(newest['starttime']))
                 last_end.add_metric([node], int(newest['endtime']))
                 last_success.add_metric([node], task_succeeded(newest['status']))
             running.add_metric([node], len(active))
             if active:
-                running_start.add_metric([node], min(active))
+                running_start.add_metric([node], min(int(task['starttime']) for task in active))
 
-        self.partial_failure = failures.summary()
+        problems = [failures.summary()]
+        if too_many:
+            problems.append(f"nodes {', '.join(too_many)} have {ACTIVE_TASK_LIMIT} or more "
+                            'running vzdump tasks, more than are listed')
+        self.partial_failure = '; '.join(filter(None, problems)) or None
         yield from (last_start, last_end, last_success, running, running_start)
+
+    def _tasks(self, node: str) -> tuple[list[dict], dict | None]:
+        """The running vzdump tasks of node and its newest finished one (None if none)."""
+        tasks = self._pve.nodes(node).tasks
+        active = tasks.get(typefilter='vzdump', source='active', limit=ACTIVE_TASK_LIMIT)
+        archive = tasks.get(typefilter='vzdump', source='archive', limit=1)
+        newest = next((task for task in archive if task_finished(task)), None)
+        return active, newest
